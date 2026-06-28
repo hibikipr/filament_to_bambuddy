@@ -105,18 +105,38 @@ def index():
 
 @app.get("/api/health")
 def health():
-    """Confirm Bambuddy is reachable + config present."""
+    """Confirm Bambuddy is reachable + config present, with a specific reason."""
     if not BAMBUDDY_API_KEY:
-        return jsonify(ok=False, error="BAMBUDDY_API_KEY not set"), 200
+        return jsonify(ok=False, bambuddy=BAMBUDDY_URL,
+                       error="BAMBUDDY_API_KEY not set — start with ./run.sh"), 200
+    headers = {"X-API-Key": BAMBUDDY_API_KEY, "Accept": "application/json"}
+    # Probe the endpoint we actually use (inventory), so the key is checked
+    # against the permission this app needs.
     try:
-        r = requests.get(
-            f"{BAMBUDDY_URL}/api/v1/system/info",
-            headers={"X-API-Key": BAMBUDDY_API_KEY, "Accept": "application/json"},
-            timeout=10,
-        )
-        return jsonify(ok=r.ok, bambuddy=BAMBUDDY_URL, status=r.status_code)
+        r = requests.get(f"{BAMBUDDY_URL}/api/v1/inventory/spools",
+                         headers=headers, params={"limit": 1}, timeout=10)
+    except requests.exceptions.SSLError as e:
+        return jsonify(ok=False, bambuddy=BAMBUDDY_URL, error=f"TLS error: {e}"), 200
+    except requests.exceptions.ConnectionError:
+        return jsonify(ok=False, bambuddy=BAMBUDDY_URL,
+                       error=f"cannot connect to {BAMBUDDY_URL} (wrong URL, or not on the same network?)"), 200
     except Exception as e:
-        return jsonify(ok=False, error=str(e)), 200
+        return jsonify(ok=False, bambuddy=BAMBUDDY_URL, error=str(e)), 200
+
+    if r.ok:
+        return jsonify(ok=True, bambuddy=BAMBUDDY_URL, status=r.status_code)
+    if r.status_code == 401:
+        return jsonify(ok=False, level="error", bambuddy=BAMBUDDY_URL,
+                       error="API key rejected (HTTP 401) — wrong or revoked key"), 200
+    if r.status_code == 403:
+        # Reachable + key valid, but the key lacks inventory permission. Not a
+        # connectivity failure — surface as a fixable warning.
+        return jsonify(ok=False, level="warn", bambuddy=BAMBUDDY_URL,
+                       error=("connected, but this API key lacks inventory access. "
+                              "In Bambuddy → Settings → API Keys, enable 'Manage Inventory' "
+                              "(required to add spools) and 'Read Status', then update run.sh.")), 200
+    return jsonify(ok=False, level="error", bambuddy=BAMBUDDY_URL,
+                   error=f"HTTP {r.status_code}: {r.text[:160]}"), 200
 
 
 @app.get("/api/lookup")
@@ -128,10 +148,26 @@ def lookup():
     if not barcode:
         return jsonify(error="barcode required"), 400
 
+    # 1. Personal cache — your own confirmed entries win.
     cache = load_cache()
     if barcode in cache:
         return jsonify(barcode=barcode, source="cache", fields=cache[barcode], title=None)
 
+    # 2. Open Filament Database — filament-specific, keyed by spool barcode (GTIN).
+    import ofd
+    ofd_fields = ofd.lookup(barcode)
+    if ofd_fields:
+        fields = {k: v for k, v in ofd_fields.items() if not k.startswith("_")}
+        fields.setdefault("label_weight", DEFAULT_LABEL_WEIGHT)
+        return jsonify(barcode=barcode, source="ofd",
+                       title=ofd_fields.get("_title"), fields=fields)
+
+    # 3. Non-numeric (Amazon ASIN etc.) → UPC databases reject these; go manual.
+    if not barcode.isdigit():
+        return jsonify(barcode=barcode, source="amazon",
+                       fields={"label_weight": DEFAULT_LABEL_WEIGHT}, title=None)
+
+    # 4. Generic UPC database (coverage for filament is patchy).
     hit = upc_lookup(barcode)
     if hit and "_error" in hit:
         # Soft-fail: still let the user fill the form manually.
@@ -144,6 +180,17 @@ def lookup():
     fields = parse_title(hit.get("title", ""), brand_hint=hit.get("brand") or None)
     fields.setdefault("label_weight", DEFAULT_LABEL_WEIGHT)
     return jsonify(barcode=barcode, source="upc", title=hit.get("title", ""), fields=fields)
+
+
+@app.get("/api/parse")
+def parse_endpoint():
+    """Parse a free-text product title into filament fields (the 'paste title' helper)."""
+    from filament_parse import parse_title
+    title = (request.args.get("title") or "").strip()
+    if not title:
+        return jsonify(fields={})
+    fields = parse_title(title)
+    return jsonify(fields=fields, title=title)
 
 
 @app.post("/api/spool")

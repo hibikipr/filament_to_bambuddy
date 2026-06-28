@@ -6,14 +6,20 @@ your [Bambuddy](https://github.com/) filament inventory.
 It's a small mobile web app:
 
 1. **Scan** the box's barcode (phone camera) — or type the number.
-2. **Look up** the product: a per-barcode cache first, then an online UPC
-   database, parsing brand / material / colour / weight from the product title.
+2. **Look up** the product, in order:
+   1. your **per-barcode cache** (anything you've confirmed before),
+   2. the **[Open Filament Database](https://openfilamentdatabase.org)** — a
+      filament-specific database keyed by spool barcode (GTIN), giving brand,
+      material, colour (+ hex), weight and print temps,
+   3. a generic **UPC database** (parses brand/material/colour/weight from the
+      product title — patchy coverage for filament),
+   4. otherwise a blank form (with a **paste-the-title** auto-fill helper).
 3. **Review** the auto-filled details (correct anything).
 4. **Add** the spool(s) to Bambuddy via its inventory API.
 
-The lookup is a **learning hybrid**: whatever you confirm is remembered for that
-barcode, so the same product auto-fills instantly next time — and gets more
-accurate the more you scan. *(Scope: new, unopened spools still in the box.)*
+The lookup also **learns**: whatever you confirm is remembered for that barcode,
+so the same product auto-fills instantly next time. *(Scope: new, unopened
+spools still in the box.)*
 
 > **Tested with** Bambuddy v0.2.4.8. Requires **Python 3.10+**.
 
@@ -48,7 +54,7 @@ To enable the camera, serve the app over HTTPS, e.g.:
 |---|---|---|
 | `BAMBUDDY_URL` | `http://localhost:8000` | Your Bambuddy base URL |
 | `BAMBUDDY_API_KEY` | — | Bambuddy API key (**required**) |
-| `UPC_LOOKUP_URL` | UPCItemDB trial | UPC lookup endpoint |
+| `UPC_LOOKUP_URL` | UPCItemDB trial | Fallback UPC lookup endpoint |
 | `UPC_API_KEY` | — | Key for a paid UPC provider (optional) |
 | `DEFAULT_LABEL_WEIGHT` | `1000` | Net grams assumed when unknown |
 | `BARCODE_CACHE_FILE` | `barcode_cache.json` | Where learned lookups are stored |

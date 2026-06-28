@@ -8,6 +8,9 @@ env/
 # Local learning cache (barcode → filament details)
 barcode_cache.json
 
+# Open Filament Database index (downloaded + rebuilt daily)
+ofd_index.json
+
 # Local run script / env with secrets — never commit
 run.sh
 .env

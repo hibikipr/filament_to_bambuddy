@@ -83,6 +83,13 @@
     </div>
     <div id="titleLine" class="muted" style="margin-bottom:8px"></div>
 
+    <label>Paste product title to auto-fill (optional)</label>
+    <div class="row">
+      <div><input id="paste_title" placeholder="e.g. SUNLU PLA+ 1.75mm Black 1KG"></div>
+      <div style="flex:0 0 96px"><button id="autofillBtn" type="button" class="btn-secondary">✨ Fill</button></div>
+    </div>
+    <div class="hint" style="margin-bottom:6px">Copy the listing name from Amazon/the store and tap Fill.</div>
+
     <label>Material *</label>
     <input id="material" placeholder="PLA, PETG, ABS…" required>
 
@@ -132,9 +139,18 @@ function toast(msg, ok=true){
 
 // ── Health ──
 fetch('/api/health').then(r=>r.json()).then(d=>{
-  $('dot').style.background = d.ok ? 'var(--green)' : 'var(--danger)';
-  $('health').textContent = d.ok ? ('Connected to '+(d.bambuddy||'Bambuddy'))
-                                 : ('Bambuddy not reachable'+(d.error?': '+d.error:''));
+  if(d.ok){
+    $('dot').style.background = 'var(--green)';
+    $('health').textContent = 'Connected to '+(d.bambuddy||'Bambuddy');
+  } else if(d.level === 'warn'){
+    $('dot').style.background = '#e0a800';  // amber: reachable, permission issue
+    $('health').innerHTML = (d.error||'Permission issue')
+      + (d.bambuddy ? '<br><span style="font-size:11px">'+d.bambuddy+'</span>' : '');
+  } else {
+    $('dot').style.background = 'var(--danger)';
+    $('health').innerHTML = 'Bambuddy not reachable'+(d.error?': '+d.error:'')
+      + (d.bambuddy ? '<br><span style="font-size:11px">using '+d.bambuddy+'</span>' : '');
+  }
 }).catch(()=>{ $('health').textContent='Server error'; });
 
 // ── Scanning ──
@@ -179,30 +195,57 @@ function hexToColorInput(rgba){ // RRGGBBAA → #RRGGBB
 }
 function colorInputToRgba(hex){ return hex.replace('#','').toUpperCase()+'FF'; }
 
+// Set form fields from a parsed/looked-up object; only overwrites where the
+// object actually has a value (so it merges over manual edits).
+function applyFields(f){
+  if(f.material!=null) $('material').value = f.material;
+  if(f.brand!=null) $('brand').value = f.brand;
+  if(f.subtype!=null) $('subtype').value = f.subtype;
+  if(f.color_name!=null) $('color_name').value = f.color_name;
+  if(f.rgba){ const c=hexToColorInput(f.rgba); if(c) $('color_picker').value=c; }
+  if(f.label_weight!=null) $('label_weight').value = f.label_weight;
+  if(f.storage_location!=null) $('storage_location').value = f.storage_location;
+  if(f.category!=null) $('category').value = f.category;
+  if(f.nozzle_temp_min!=null) $('nozzle_temp_min').value = f.nozzle_temp_min;
+  if(f.nozzle_temp_max!=null) $('nozzle_temp_max').value = f.nozzle_temp_max;
+  if(f.cost_per_kg!=null) $('cost_per_kg').value = f.cost_per_kg;
+  if(f.note!=null) $('note').value = f.note;
+}
+
+const BADGE = {
+  cache:  ['remembered', 'cache'],
+  ofd:    ['Open Filament Database', 'cache'],
+  upc:    ['from product database', 'upc'],
+  amazon: ['Amazon code — enter below (I\'ll remember it)', ''],
+  none:   ['not in database — enter below (I\'ll remember it)', ''],
+  error:  ['lookup unavailable — enter below', ''],
+};
+
 function fillForm(d){
   const f = d.fields || {};
   $('form').classList.remove('hidden');
-  const badge=$('srcBadge'); badge.className='badge '+(d.source||'');
-  badge.textContent = d.source==='cache' ? 'remembered'
-                    : d.source==='upc' ? 'from UPC database'
-                    : d.source==='error' ? 'lookup failed — fill manually'
-                    : 'not found — fill manually';
+  const [text, cls] = BADGE[d.source] || BADGE.none;
+  $('srcBadge').className = 'badge '+cls;
+  $('srcBadge').textContent = text;
   $('titleLine').textContent = d.title || '';
-  $('material').value = f.material || '';
-  $('brand').value = f.brand || '';
-  $('subtype').value = f.subtype || '';
-  $('color_name').value = f.color_name || '';
-  if(f.rgba){ const c=hexToColorInput(f.rgba); if(c) $('color_picker').value=c; }
-  $('label_weight').value = f.label_weight || 1000;
-  $('storage_location').value = f.storage_location || '';
-  $('category').value = f.category || '';
-  $('nozzle_temp_min').value = f.nozzle_temp_min || '';
-  $('nozzle_temp_max').value = f.nozzle_temp_max || '';
-  $('cost_per_kg').value = f.cost_per_kg || '';
-  $('note').value = f.note || '';
-  $('quantity').value = 1;
+  // reset then apply
+  ['brand','subtype','color_name','storage_location','category',
+   'nozzle_temp_min','nozzle_temp_max','cost_per_kg','note','paste_title'].forEach(id=>$(id).value='');
+  $('material').value=''; $('label_weight').value=1000; $('quantity').value=1;
+  applyFields(f);
   $('material').focus();
 }
+
+// Auto-fill from a pasted product title.
+$('autofillBtn').onclick = async () => {
+  const t = $('paste_title').value.trim();
+  if(!t) return;
+  try{
+    const d = await (await fetch('/api/parse?title='+encodeURIComponent(t))).json();
+    applyFields(d.fields||{});
+    if(!Object.keys(d.fields||{}).length) toast('Couldn\'t parse that title', false);
+  }catch(e){ toast('Parse failed', false); }
+};
 
 // ── Submit ──
 $('form').onsubmit = async (e) => {

@@ -121,6 +121,61 @@ def manifest():
     return resp
 
 
+# Dropdown option lists (mirroring Bambuddy's spool edit form).
+MATERIAL_OPTIONS = ["PLA", "PETG", "PCTG", "ABS", "ASA", "TPU", "TPE", "PC", "PA",
+                    "Nylon", "PVA", "HIPS", "PP", "PET", "PLA-CF", "PETG-CF", "PA-CF"]
+SUBTYPE_OPTIONS = ["Basic", "Matte", "Silk", "Silk+", "Plus", "Tough", "HF",
+                   "High Speed", "CF", "GF", "Galaxy", "Glow", "Marble", "Metal",
+                   "Rainbow", "Sparkle", "Wood", "Translucent", "Transparent",
+                   "Clear", "Gradient", "Dual Color", "Tri Color", "Carbon Fiber"]
+WEIGHT_OPTIONS = [250, 500, 750, 1000, 2000, 3000]
+COLOR_OPTIONS = ["Black", "White", "Gray", "Silver", "Red", "Orange", "Yellow",
+                 "Green", "Blue", "Navy", "Cyan", "Teal", "Purple", "Pink",
+                 "Magenta", "Brown", "Beige", "Gold", "Bronze", "Copper",
+                 "Natural", "Clear", "Transparent"]
+DEFAULT_BRANDS = ["Bambu Lab", "Polymaker", "eSUN", "Overture", "SUNLU", "Inland",
+                  "Hatchbox", "Prusament", "Creality", "Generic"]
+
+
+def _bambuddy_locations() -> list[str]:
+    """Storage-location names from Bambuddy (best-effort; empty on failure)."""
+    if not BAMBUDDY_API_KEY:
+        return []
+    try:
+        r = requests.get(f"{BAMBUDDY_URL}/api/v1/inventory/locations",
+                         headers={"X-API-Key": BAMBUDDY_API_KEY, "Accept": "application/json"},
+                         timeout=10)
+        if r.ok:
+            return [loc.get("name") for loc in r.json() if loc.get("name")]
+    except Exception:
+        pass
+    return []
+
+
+@app.get("/api/options")
+def options():
+    """Dropdown data for the form (materials, subtypes, weights, colours, brands, locations)."""
+    import ofd
+    try:
+        brands = sorted(set(DEFAULT_BRANDS) | set(ofd.get_brands()), key=str.lower)
+    except Exception:
+        brands = DEFAULT_BRANDS
+    return jsonify(materials=MATERIAL_OPTIONS, subtypes=SUBTYPE_OPTIONS,
+                   weights=WEIGHT_OPTIONS, colors=COLOR_OPTIONS, brands=brands,
+                   locations=_bambuddy_locations())
+
+
+@app.post("/api/ofd/refresh")
+def ofd_refresh():
+    """Force a re-download/rebuild of the Open Filament Database index."""
+    import ofd
+    try:
+        idx = ofd.get_index(force=True)
+        return jsonify(ok=True, barcodes=len(idx), brands=len(ofd.get_brands()))
+    except Exception as e:
+        return jsonify(ok=False, error=str(e)), 502
+
+
 @app.get("/api/health")
 def health():
     """Confirm Bambuddy is reachable + config present, with a specific reason."""

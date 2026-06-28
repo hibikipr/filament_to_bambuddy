@@ -77,7 +77,11 @@
 
 <main>
   <div class="card">
-    <div class="muted"><span id="dot" class="status-dot" style="background:#888"></span><span id="health">Checking Bambuddy…</span></div>
+    <div style="display:flex;align-items:center;gap:8px">
+      <div class="muted" style="flex:1"><span id="dot" class="status-dot" style="background:#888"></span><span id="health">Checking Bambuddy…</span></div>
+      <button id="refreshDb" class="btn-secondary" style="flex:0 0 auto;width:auto;padding:8px 12px;font-size:13px">⟳ Refresh DB</button>
+    </div>
+    <div id="refreshHint" class="hint"></div>
   </div>
 
   <!-- Scan -->
@@ -118,25 +122,27 @@
     </div>
 
     <label>Material *</label>
-    <input id="material" placeholder="PLA, PETG, ABS…" required>
+    <select id="material" required></select>
 
     <div class="row">
-      <div><label>Brand</label><input id="brand"></div>
-      <div><label>Subtype / finish</label><input id="subtype" placeholder="Plus, Matte, Silk…"></div>
+      <div><label>Brand</label><input id="brand" list="brandList" autocomplete="off"></div>
+      <div><label>Subtype / finish</label><select id="subtype"></select></div>
     </div>
+    <datalist id="brandList"></datalist>
 
     <div class="row">
-      <div><label>Colour name</label><input id="color_name"></div>
+      <div><label>Colour name</label><input id="color_name" list="colorList" autocomplete="off"></div>
       <div><label>Colour</label><input id="color_picker" type="color" class="swatch" value="#00ae42"></div>
     </div>
+    <datalist id="colorList"></datalist>
 
     <div class="row">
-      <div><label>Net weight (g)</label><input id="label_weight" inputmode="numeric" value="1000"></div>
+      <div><label>Net weight (g)</label><select id="label_weight"></select></div>
       <div><label>Quantity</label><input id="quantity" inputmode="numeric" value="1"></div>
     </div>
 
     <div class="row">
-      <div><label>Storage location</label><input id="storage_location" placeholder="optional"></div>
+      <div><label>Storage location</label><select id="storage_location"></select></div>
       <div><label>Category</label><input id="category" placeholder="optional"></div>
     </div>
 
@@ -224,6 +230,52 @@ fetch('/api/health').then(r=>r.json()).then(d=>{
   }
 }).catch(()=>{ $('health').textContent='Server error'; });
 
+// ── Dropdown options (mirrors Bambuddy's spool form) ──
+let OPTS = null;
+function fillSelect(id, opts, o={}){
+  const sel=$(id); sel.innerHTML='';
+  if(o.blank){ const op=document.createElement('option'); op.value=''; op.textContent=o.blankText||'—'; sel.appendChild(op); }
+  (opts||[]).forEach(v=>{ const op=document.createElement('option'); op.value=String(v); op.textContent=String(v); sel.appendChild(op); });
+}
+function fillDatalist(id, opts){
+  const dl=$(id); dl.innerHTML=''; (opts||[]).forEach(v=>{ const op=document.createElement('option'); op.value=v; dl.appendChild(op); });
+}
+// Set a <select>, injecting the value as an option if it isn't a known one
+// (lookups/OCR can produce values outside the preset list).
+function setSelect(id, value){
+  const sel=$(id);
+  if(value==null || value===''){ sel.value=''; return; }
+  value=String(value);
+  if(![...sel.options].some(o=>o.value===value)){
+    const op=document.createElement('option'); op.value=value; op.textContent=value;
+    sel.insertBefore(op, sel.options[1] || null);
+  }
+  sel.value=value;
+}
+async function loadOptions(){
+  try{ OPTS = await (await fetch('/api/options')).json(); }
+  catch(e){ OPTS = {materials:[],subtypes:[],weights:[1000],colors:[],brands:[],locations:[]}; }
+  fillSelect('material', OPTS.materials, {blank:true});
+  fillSelect('subtype', OPTS.subtypes, {blank:true});
+  fillSelect('label_weight', OPTS.weights.map(String));
+  fillSelect('storage_location', OPTS.locations, {blank:true});
+  fillDatalist('brandList', OPTS.brands);
+  fillDatalist('colorList', OPTS.colors);
+  setSelect('label_weight','1000');
+}
+loadOptions();
+
+// Force-refresh the Open Filament Database.
+$('refreshDb').onclick = async () => {
+  $('refreshDb').disabled=true; $('refreshHint').textContent='Refreshing database…';
+  try{
+    const d = await (await fetch('/api/ofd/refresh',{method:'POST'})).json();
+    if(d.ok){ $('refreshHint').textContent='Updated: '+d.barcodes+' barcodes, '+d.brands+' brands.'; await loadOptions(); }
+    else { $('refreshHint').textContent='Refresh failed'+(d.error?': '+d.error:''); }
+  }catch(e){ $('refreshHint').textContent='Refresh failed'; }
+  finally{ $('refreshDb').disabled=false; }
+};
+
 // ── Scanning ──
 $('startBtn').onclick = async () => {
   if(!window.ZXingBrowser){ toast('Scanner library failed to load', false); return; }
@@ -270,13 +322,13 @@ function colorInputToRgba(hex){ return hex.replace('#','').toUpperCase()+'FF'; }
 // Set form fields from a parsed/looked-up object; only overwrites where the
 // object actually has a value (so it merges over manual edits).
 function applyFields(f){
-  if(f.material!=null) $('material').value = f.material;
+  if(f.material!=null) setSelect('material', f.material);
   if(f.brand!=null) $('brand').value = f.brand;
-  if(f.subtype!=null) $('subtype').value = f.subtype;
+  if(f.subtype!=null) setSelect('subtype', f.subtype);
   if(f.color_name!=null) $('color_name').value = f.color_name;
   if(f.rgba){ const c=hexToColorInput(f.rgba); if(c) $('color_picker').value=c; }
-  if(f.label_weight!=null) $('label_weight').value = f.label_weight;
-  if(f.storage_location!=null) $('storage_location').value = f.storage_location;
+  if(f.label_weight!=null) setSelect('label_weight', f.label_weight);
+  if(f.storage_location!=null) setSelect('storage_location', f.storage_location);
   if(f.category!=null) $('category').value = f.category;
   if(f.nozzle_temp_min!=null) $('nozzle_temp_min').value = f.nozzle_temp_min;
   if(f.nozzle_temp_max!=null) $('nozzle_temp_max').value = f.nozzle_temp_max;
@@ -308,9 +360,10 @@ function fillForm(d){
   $('searchLink').href = 'https://www.google.com/search?q='+encodeURIComponent('"'+code+'" filament');
   $('searchLink').style.display = code ? '' : 'none';
   // reset then apply
-  ['brand','subtype','color_name','storage_location','category',
-   'nozzle_temp_min','nozzle_temp_max','cost_per_kg','note','paste_title'].forEach(id=>$(id).value='');
-  $('material').value=''; $('label_weight').value=1000; $('quantity').value=1;
+  ['brand','color_name','category','nozzle_temp_min','nozzle_temp_max',
+   'cost_per_kg','note','paste_title'].forEach(id=>$(id).value='');
+  setSelect('material',''); setSelect('subtype',''); setSelect('storage_location','');
+  setSelect('label_weight','1000'); $('quantity').value=1;
   applyFields(f);
   $('material').focus();
 }

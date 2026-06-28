@@ -24,7 +24,12 @@
   *{box-sizing:border-box}
   body{margin:0;background:var(--bg);color:var(--fg);
     font-family:Inter,system-ui,-apple-system,"Segoe UI",sans-serif;
-    -webkit-text-size-adjust:100%}
+    -webkit-text-size-adjust:100%;overscroll-behavior-y:contain}
+  #ptr{position:fixed;top:0;left:0;right:0;height:56px;display:flex;align-items:center;
+    justify-content:center;gap:8px;color:var(--muted);font-size:13px;background:var(--bg);
+    transform:translateY(-56px);z-index:30;pointer-events:none}
+  #ptrIcon{font-size:18px;display:inline-block;transition:transform .15s}
+  @keyframes ptrspin{to{transform:rotate(360deg)}}
   header{padding:16px;display:flex;align-items:center;gap:10px;
     border-bottom:1px solid #333;position:sticky;top:0;background:var(--bg);z-index:5}
   header h1{font-size:18px;margin:0;font-weight:600}
@@ -60,6 +65,7 @@
 </style>
 </head>
 <body>
+<div id="ptr"><span id="ptrIcon">↓</span><span id="ptrText">Pull to refresh</span></div>
 <header>
   <svg class="cube" viewBox="0 0 64 64" aria-hidden="true">
     <polygon points="32,8 8,22 32,36 56,22" fill="#00c64d"/>
@@ -156,6 +162,45 @@ let reader = null, currentBarcode = null;
 if('serviceWorker' in navigator && window.isSecureContext){
   navigator.serviceWorker.register('/sw.js').catch(()=>{});
 }
+
+// ── Pull-to-refresh (custom, for standalone PWA where native is disabled) ──
+(function(){
+  const ptr=$('ptr'), icon=$('ptrIcon'), txt=$('ptrText');
+  const TRIGGER=90;            // pull distance (px) to trigger a refresh
+  let startY=0, pull=0, active=false;
+  const atTop = () => (window.scrollY || document.documentElement.scrollTop || 0) <= 0;
+
+  window.addEventListener('touchstart', e => {
+    if(e.touches.length===1 && atTop()){ startY=e.touches[0].clientY; active=true; ptr.style.transition='none'; }
+  }, {passive:true});
+
+  window.addEventListener('touchmove', e => {
+    if(!active) return;
+    pull = e.touches[0].clientY - startY;
+    if(pull>0 && atTop()){
+      e.preventDefault();                       // take over the gesture
+      const off = Math.min(pull*0.55, 72);      // resistance
+      ptr.style.transform = 'translateY('+(off-56)+'px)';
+      const past = pull>=TRIGGER;
+      icon.style.transform = past ? 'rotate(180deg)' : 'rotate(0deg)';
+      txt.textContent = past ? 'Release to refresh' : 'Pull to refresh';
+    } else { active=false; }
+  }, {passive:false});
+
+  window.addEventListener('touchend', () => {
+    if(!active) return; active=false;
+    ptr.style.transition='transform .25s';
+    if(pull>=TRIGGER){
+      ptr.style.transform='translateY(0)';
+      txt.textContent='Refreshing…'; icon.textContent='↻';
+      icon.style.animation='ptrspin .8s linear infinite';
+      setTimeout(()=>location.reload(), 350);
+    } else {
+      ptr.style.transform='translateY(-56px)';
+    }
+    pull=0;
+  });
+})();
 
 function toast(msg, ok=true){
   const t=document.createElement('div');

@@ -1,0 +1,14 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+
+# Local learning cache (barcode → filament details)
+barcode_cache.json
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/

@@ -1,0 +1,239 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Filament → Bambuddy</title>
+<style>
+  :root{
+    --bg:#1a1a1a; --card:#2d2d2d; --tertiary:#3d3d3d; --green:#00ae42;
+    --green-light:#00c64d; --fg:#e8e8e8; --muted:#a0a0a0; --danger:#e0533d;
+    --radius:12px;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);
+    font-family:Inter,system-ui,-apple-system,"Segoe UI",sans-serif;
+    -webkit-text-size-adjust:100%}
+  header{padding:16px;display:flex;align-items:center;gap:10px;
+    border-bottom:1px solid #333;position:sticky;top:0;background:var(--bg);z-index:5}
+  header h1{font-size:18px;margin:0;font-weight:600}
+  .cube{width:26px;height:26px;flex:0 0 auto}
+  main{padding:16px;max-width:560px;margin:0 auto;padding-bottom:48px}
+  .card{background:var(--card);border-radius:var(--radius);padding:16px;margin-bottom:16px}
+  .muted{color:var(--muted);font-size:13px}
+  label{display:block;font-size:13px;color:var(--muted);margin:10px 0 4px}
+  input,select,button,textarea{font-size:16px;font-family:inherit}
+  input,select,textarea{width:100%;padding:11px;border-radius:9px;border:1px solid #4a4a4a;
+    background:#1f1f1f;color:var(--fg)}
+  input:focus,select:focus,textarea:focus{outline:none;border-color:var(--green)}
+  .row{display:flex;gap:10px}
+  .row>div{flex:1}
+  button{cursor:pointer;border:none;border-radius:10px;padding:13px 16px;font-weight:600}
+  .btn-primary{background:var(--green);color:#0a0a0a;width:100%}
+  .btn-primary:disabled{background:#066b2c;color:#5a5a5a}
+  .btn-secondary{background:var(--tertiary);color:var(--fg);width:100%}
+  #video{width:100%;border-radius:var(--radius);background:#000;aspect-ratio:4/3;object-fit:cover}
+  .hidden{display:none}
+  .badge{display:inline-block;font-size:11px;padding:3px 8px;border-radius:999px;
+    background:var(--tertiary);color:var(--muted);margin-left:6px;vertical-align:middle}
+  .badge.cache{background:#0c4a2a;color:var(--green-light)}
+  .badge.upc{background:#0b3a66;color:#9cd2ff}
+  .toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);
+    padding:12px 18px;border-radius:10px;font-weight:600;max-width:90%;text-align:center;
+    box-shadow:0 6px 24px rgba(0,0,0,.4);z-index:20}
+  .toast.ok{background:var(--green);color:#0a0a0a}
+  .toast.err{background:var(--danger);color:#fff}
+  .swatch{height:44px;border-radius:9px;border:1px solid #4a4a4a;width:100%;padding:0}
+  .hint{font-size:12px;color:var(--muted);margin-top:6px}
+  .status-dot{width:9px;height:9px;border-radius:50%;display:inline-block;margin-right:6px}
+</style>
+</head>
+<body>
+<header>
+  <svg class="cube" viewBox="0 0 64 64" aria-hidden="true">
+    <polygon points="32,8 8,22 32,36 56,22" fill="#00c64d"/>
+    <polygon points="8,22 8,46 32,60 32,36" fill="#00ae42"/>
+    <polygon points="56,22 56,46 32,60 32,36" fill="#009438"/>
+  </svg>
+  <h1>Filament → Bambuddy</h1>
+</header>
+
+<main>
+  <div class="card">
+    <div class="muted"><span id="dot" class="status-dot" style="background:#888"></span><span id="health">Checking Bambuddy…</span></div>
+  </div>
+
+  <!-- Scan -->
+  <div class="card">
+    <button id="startBtn" class="btn-secondary">📷 Scan barcode</button>
+    <video id="video" class="hidden" playsinline></video>
+    <button id="stopBtn" class="btn-secondary hidden" style="margin-top:10px">Stop camera</button>
+    <label for="manual" style="margin-top:14px">…or enter the barcode number</label>
+    <div class="row">
+      <div><input id="manual" inputmode="numeric" placeholder="e.g. 6940082300018"></div>
+      <div style="flex:0 0 96px"><button id="lookupBtn" class="btn-secondary">Look up</button></div>
+    </div>
+    <div id="scanHint" class="hint"></div>
+  </div>
+
+  <!-- Details form -->
+  <form id="form" class="card hidden">
+    <div style="font-weight:600;margin-bottom:4px">
+      Filament details <span id="srcBadge" class="badge"></span>
+    </div>
+    <div id="titleLine" class="muted" style="margin-bottom:8px"></div>
+
+    <label>Material *</label>
+    <input id="material" placeholder="PLA, PETG, ABS…" required>
+
+    <div class="row">
+      <div><label>Brand</label><input id="brand"></div>
+      <div><label>Subtype / finish</label><input id="subtype" placeholder="Plus, Matte, Silk…"></div>
+    </div>
+
+    <div class="row">
+      <div><label>Colour name</label><input id="color_name"></div>
+      <div><label>Colour</label><input id="color_picker" type="color" class="swatch" value="#00ae42"></div>
+    </div>
+
+    <div class="row">
+      <div><label>Net weight (g)</label><input id="label_weight" inputmode="numeric" value="1000"></div>
+      <div><label>Quantity</label><input id="quantity" inputmode="numeric" value="1"></div>
+    </div>
+
+    <div class="row">
+      <div><label>Storage location</label><input id="storage_location" placeholder="optional"></div>
+      <div><label>Category</label><input id="category" placeholder="optional"></div>
+    </div>
+
+    <div class="row">
+      <div><label>Nozzle min °C</label><input id="nozzle_temp_min" inputmode="numeric"></div>
+      <div><label>Nozzle max °C</label><input id="nozzle_temp_max" inputmode="numeric"></div>
+      <div><label>Cost /kg</label><input id="cost_per_kg" inputmode="decimal"></div>
+    </div>
+
+    <label>Note</label>
+    <textarea id="note" rows="2" placeholder="optional"></textarea>
+
+    <button id="submitBtn" type="submit" class="btn-primary" style="margin-top:16px">＋ Add to Bambuddy inventory</button>
+  </form>
+</main>
+
+<script src="https://unpkg.com/@zxing/browser@0.1.5/umd/zxing-browser.min.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+let reader = null, currentBarcode = null;
+
+function toast(msg, ok=true){
+  const t=document.createElement('div');
+  t.className='toast '+(ok?'ok':'err'); t.textContent=msg;
+  document.body.appendChild(t); setTimeout(()=>t.remove(), 3500);
+}
+
+// ── Health ──
+fetch('/api/health').then(r=>r.json()).then(d=>{
+  $('dot').style.background = d.ok ? 'var(--green)' : 'var(--danger)';
+  $('health').textContent = d.ok ? ('Connected to '+(d.bambuddy||'Bambuddy'))
+                                 : ('Bambuddy not reachable'+(d.error?': '+d.error:''));
+}).catch(()=>{ $('health').textContent='Server error'; });
+
+// ── Scanning ──
+$('startBtn').onclick = async () => {
+  if(!window.ZXingBrowser){ toast('Scanner library failed to load', false); return; }
+  if(!navigator.mediaDevices || !window.isSecureContext){
+    $('scanHint').textContent='Camera needs https:// (or localhost). Type the barcode below instead.';
+    return;
+  }
+  try{
+    reader = new ZXingBrowser.BrowserMultiFormatReader();
+    $('video').classList.remove('hidden'); $('startBtn').classList.add('hidden');
+    $('stopBtn').classList.remove('hidden'); $('scanHint').textContent='Point at the barcode…';
+    await reader.decodeFromVideoDevice(undefined, $('video'), (result, err) => {
+      if(result){ stopScan(); onBarcode(result.getText()); }
+    });
+  }catch(e){ $('scanHint').textContent='Camera error: '+e; stopScan(); }
+};
+function stopScan(){
+  try{ reader && reader.reset && reader.reset(); }catch(e){}
+  $('video').classList.add('hidden'); $('startBtn').classList.remove('hidden');
+  $('stopBtn').classList.add('hidden');
+}
+$('stopBtn').onclick = stopScan;
+$('lookupBtn').onclick = () => { const v=$('manual').value.trim(); if(v) onBarcode(v); };
+$('manual').addEventListener('keydown', e => { if(e.key==='Enter'){ e.preventDefault(); $('lookupBtn').click(); }});
+
+// ── Lookup → fill form ──
+async function onBarcode(barcode){
+  currentBarcode = barcode;
+  $('scanHint').textContent='Looking up '+barcode+'…';
+  try{
+    const d = await (await fetch('/api/lookup?barcode='+encodeURIComponent(barcode))).json();
+    fillForm(d);
+    $('scanHint').textContent='';
+  }catch(e){ toast('Lookup failed', false); }
+}
+
+function hexToColorInput(rgba){ // RRGGBBAA → #RRGGBB
+  if(!rgba) return null;
+  const h = rgba.replace('#',''); return '#'+h.substring(0,6);
+}
+function colorInputToRgba(hex){ return hex.replace('#','').toUpperCase()+'FF'; }
+
+function fillForm(d){
+  const f = d.fields || {};
+  $('form').classList.remove('hidden');
+  const badge=$('srcBadge'); badge.className='badge '+(d.source||'');
+  badge.textContent = d.source==='cache' ? 'remembered'
+                    : d.source==='upc' ? 'from UPC database'
+                    : d.source==='error' ? 'lookup failed — fill manually'
+                    : 'not found — fill manually';
+  $('titleLine').textContent = d.title || '';
+  $('material').value = f.material || '';
+  $('brand').value = f.brand || '';
+  $('subtype').value = f.subtype || '';
+  $('color_name').value = f.color_name || '';
+  if(f.rgba){ const c=hexToColorInput(f.rgba); if(c) $('color_picker').value=c; }
+  $('label_weight').value = f.label_weight || 1000;
+  $('storage_location').value = f.storage_location || '';
+  $('category').value = f.category || '';
+  $('nozzle_temp_min').value = f.nozzle_temp_min || '';
+  $('nozzle_temp_max').value = f.nozzle_temp_max || '';
+  $('cost_per_kg').value = f.cost_per_kg || '';
+  $('note').value = f.note || '';
+  $('quantity').value = 1;
+  $('material').focus();
+}
+
+// ── Submit ──
+$('form').onsubmit = async (e) => {
+  e.preventDefault();
+  const fields = {
+    material: $('material').value.trim(),
+    brand: $('brand').value.trim(),
+    subtype: $('subtype').value.trim(),
+    color_name: $('color_name').value.trim(),
+    rgba: colorInputToRgba($('color_picker').value),
+    label_weight: $('label_weight').value.trim(),
+    storage_location: $('storage_location').value.trim(),
+    category: $('category').value.trim(),
+    nozzle_temp_min: $('nozzle_temp_min').value.trim(),
+    nozzle_temp_max: $('nozzle_temp_max').value.trim(),
+    cost_per_kg: $('cost_per_kg').value.trim(),
+    note: $('note').value.trim(),
+  };
+  if(!fields.material){ toast('Material is required', false); return; }
+  const quantity = parseInt($('quantity').value)||1;
+  $('submitBtn').disabled = true;
+  try{
+    const r = await fetch('/api/spool', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({barcode: currentBarcode, quantity, fields})});
+    const d = await r.json();
+    if(d.ok){ toast('Added '+d.created+' spool'+(d.created>1?'s':'')+' ✓');
+      $('form').classList.add('hidden'); $('manual').value=''; currentBarcode=null; }
+    else { toast('Failed'+(d.errors&&d.errors.length?': '+d.errors[0]:''), false); }
+  }catch(e){ toast('Request failed', false); }
+  finally{ $('submitBtn').disabled = false; }
+};
+</script>
+</body>
+</html>

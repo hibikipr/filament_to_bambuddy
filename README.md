@@ -14,6 +14,9 @@ It's a small mobile web app:
    3. a generic **UPC database** (parses brand/material/colour/weight from the
       product title — patchy coverage for filament),
    4. otherwise a blank form, with a **paste-the-title** auto-fill helper.
+   Or skip the barcode entirely and **📷 photograph the label** — on-device OCR
+   reads the text and the same parser fills the form (works even over plain
+   HTTP, unlike the live barcode camera).
 3. **Review** the auto-filled details (correct anything).
 4. **Add** the spool(s) to Bambuddy via its inventory API.
 

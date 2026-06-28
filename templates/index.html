@@ -30,7 +30,8 @@
     transform:translateY(-56px);z-index:30;pointer-events:none}
   #ptrIcon{font-size:18px;display:inline-block;transition:transform .15s}
   @keyframes ptrspin{to{transform:rotate(360deg)}}
-  header{padding:16px;display:flex;align-items:center;gap:10px;
+  header{padding:16px;padding-top:calc(16px + env(safe-area-inset-top));
+    display:flex;align-items:center;gap:10px;
     border-bottom:1px solid #333;position:sticky;top:0;background:var(--bg);z-index:5}
   header h1{font-size:18px;margin:0;font-weight:600}
   .cube{width:26px;height:26px;flex:0 0 auto}

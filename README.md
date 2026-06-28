@@ -61,6 +61,17 @@ Create the key in **Bambuddy → Settings → API Keys** with these enabled:
 Without **Manage Inventory** the add will fail with `403`; without **Read
 Status** the status line shows an amber permission warning.
 
+### Install it as an app (PWA)
+
+The app is an installable **PWA** — add it to your phone's home screen for a
+full-screen, app-like experience with its own icon:
+
+- **Android (Chrome):** menu ⋮ → *Add to Home screen* / *Install app*.
+- **iOS (Safari):** Share → *Add to Home Screen*.
+
+Like the camera, the installable PWA (service worker / offline shell) needs a
+**secure origin** (HTTPS or `localhost`) — see below.
+
 ### ⚠️ Camera access needs a secure origin
 
 Phone browsers only allow camera access over **HTTPS** (or `localhost`). Opening
@@ -106,6 +117,7 @@ Each created spool is tagged `data_origin = "barcode-scan"`.
 | `ofd.py` | Open Filament Database client — builds the barcode → fields index, cached/refreshed daily |
 | `filament_parse.py` | Heuristics turning a product title into filament fields (UPC fallback + paste-title helper) |
 | `templates/index.html` | Mobile UI (barcode scan + manual entry + editable form), Bambuddy dark/green theme |
+| `static/manifest.webmanifest`, `static/sw.js`, `static/icons/` | PWA manifest, service worker, and app icons |
 
 Not in the repo (gitignored): `run.sh` (your secrets), `barcode_cache.json`
 (your learned lookups), `ofd_index.json` (downloaded database cache).

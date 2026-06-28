@@ -4,6 +4,17 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Filament → Bambuddy</title>
+<!-- PWA -->
+<link rel="manifest" href="/manifest.webmanifest">
+<meta name="theme-color" content="#00ae42">
+<link rel="icon" type="image/png" href="/static/icons/icon-192.png">
+<link rel="apple-touch-icon" href="/static/icons/apple-touch-icon.png">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Filament">
+<meta name="application-name" content="Filament">
+<style>html{background:#1a1a1a}</style>
 <style>
   :root{
     --bg:#1a1a1a; --card:#2d2d2d; --tertiary:#3d3d3d; --green:#00ae42;
@@ -130,6 +141,11 @@
 <script>
 const $ = id => document.getElementById(id);
 let reader = null, currentBarcode = null;
+
+// Register the service worker (enables installable PWA). Needs https or localhost.
+if('serviceWorker' in navigator && window.isSecureContext){
+  navigator.serviceWorker.register('/sw.js').catch(()=>{});
+}
 
 function toast(msg, ok=true){
   const t=document.createElement('div');

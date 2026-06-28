@@ -103,6 +103,24 @@ def index():
     return render_template("index.html", bambuddy_url=BAMBUDDY_URL)
 
 
+@app.get("/sw.js")
+def service_worker():
+    # Served from the root so its scope covers the whole site (a SW under
+    # /static would only control /static/*).
+    resp = app.send_static_file("sw.js")
+    resp.headers["Content-Type"] = "application/javascript"
+    resp.headers["Service-Worker-Allowed"] = "/"
+    resp.headers["Cache-Control"] = "no-cache"
+    return resp
+
+
+@app.get("/manifest.webmanifest")
+def manifest():
+    resp = app.send_static_file("manifest.webmanifest")
+    resp.headers["Content-Type"] = "application/manifest+json"
+    return resp
+
+
 @app.get("/api/health")
 def health():
     """Confirm Bambuddy is reachable + config present, with a specific reason."""

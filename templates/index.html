@@ -92,6 +92,7 @@
     <div style="font-weight:600;margin-bottom:4px">
       Filament details <span id="srcBadge" class="badge"></span>
     </div>
+    <div id="barcodeLine" class="muted" style="margin-bottom:2px"></div>
     <div id="titleLine" class="muted" style="margin-bottom:8px"></div>
 
     <label>Paste product title to auto-fill (optional)</label>
@@ -197,6 +198,7 @@ $('manual').addEventListener('keydown', e => { if(e.key==='Enter'){ e.preventDef
 // ── Lookup → fill form ──
 async function onBarcode(barcode){
   currentBarcode = barcode;
+  $('manual').value = barcode;            // echo what was read into the input
   $('scanHint').textContent='Looking up '+barcode+'…';
   try{
     const d = await (await fetch('/api/lookup?barcode='+encodeURIComponent(barcode))).json();
@@ -243,6 +245,8 @@ function fillForm(d){
   const [text, cls] = BADGE[d.source] || BADGE.none;
   $('srcBadge').className = 'badge '+cls;
   $('srcBadge').textContent = text;
+  $('barcodeLine').innerHTML = d.barcode
+    ? 'Barcode: <span style="color:var(--fg);font-family:Menlo,monospace">'+d.barcode+'</span>' : '';
   $('titleLine').textContent = d.title || '';
   // reset then apply
   ['brand','subtype','color_name','storage_location','category',

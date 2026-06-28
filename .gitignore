@@ -8,6 +8,11 @@ env/
 # Local learning cache (barcode → filament details)
 barcode_cache.json
 
+# Local run script / env with secrets — never commit
+run.sh
+.env
+*.local
+
 # OS / editor
 .DS_Store
 .idea/

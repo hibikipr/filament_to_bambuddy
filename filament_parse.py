@@ -64,10 +64,26 @@ COLOR_HEX = {
 _COLOR_WORDS = sorted(COLOR_HEX.keys(), key=len, reverse=True)
 
 
-def _find_brand(text_upper: str) -> str | None:
-    for brand in KNOWN_BRANDS:
-        if brand.upper() in text_upper:
-            return brand
+def _find_brand(text_upper: str, extra_brands=None) -> str | None:
+    """Find a brand in the text. Tries the built-in list plus any extra brands
+    (e.g. the ~140 from the Open Filament Database), longest name first so a
+    specific brand wins. Substring match (not word-boundary) so it still catches
+    OCR text where words run together (e.g. 'OfPanchroma')."""
+    brands = list(KNOWN_BRANDS) + list(extra_brands or [])
+    seen, uniq = set(), []
+    for b in brands:
+        b = (b or "").strip()
+        if b and b.upper() not in seen:
+            seen.add(b.upper())
+            uniq.append(b)
+    uniq.sort(key=len, reverse=True)
+    # Prefer specific (>=4 char) matches; fall back to shorter exact ones.
+    for b in uniq:
+        if len(b) >= 4 and b.upper() in text_upper:
+            return b
+    for b in uniq:
+        if b.upper() in text_upper:
+            return b
     return None
 
 
@@ -114,11 +130,12 @@ def _find_weight_grams(text: str) -> int | None:
     return None
 
 
-def parse_title(title: str, brand_hint: str | None = None) -> dict:
+def parse_title(title: str, brand_hint: str | None = None, extra_brands=None) -> dict:
     """Best-effort parse of a product title into Bambuddy spool fields.
 
-    Returns a dict with any of: brand, material, subtype, color_name, rgba,
-    diameter_mm, label_weight. Missing fields are simply absent.
+    ``extra_brands`` augments the built-in brand list (e.g. the Open Filament
+    Database's brands). Returns a dict with any of: brand, material, subtype,
+    color_name, rgba, diameter_mm, label_weight. Missing fields are absent.
     """
     if not title:
         return {}
@@ -126,7 +143,7 @@ def parse_title(title: str, brand_hint: str | None = None) -> dict:
     upper = text.upper()
     out: dict = {}
 
-    brand = brand_hint or _find_brand(upper)
+    brand = brand_hint or _find_brand(upper, extra_brands)
     if brand:
         out["brand"] = brand
 

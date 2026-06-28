@@ -23,6 +23,7 @@ OFD_TTL_SECONDS = 24 * 3600
 
 # In-process cache so we don't rebuild on every request.
 _INDEX: dict | None = None
+_BRANDS: list | None = None
 _INDEX_LOADED_AT = 0.0
 
 
@@ -109,41 +110,59 @@ def _build_index(all_json: dict) -> dict:
     return index
 
 
-def _load_cached_index() -> dict | None:
+def _load_cached() -> tuple[dict, list] | None:
     if not OFD_CACHE.exists():
         return None
     try:
         data = json.loads(OFD_CACHE.read_text())
         if time.time() - data.get("built_at", 0) > OFD_TTL_SECONDS:
             return None
-        return data.get("index")
+        # Older caches predate the brand list — treat as stale so we rebuild.
+        if "brands" not in data:
+            return None
+        return data.get("index"), data.get("brands", [])
     except Exception:
         return None
 
 
-def _refresh_index() -> dict:
-    """Download all.json and rebuild the index, caching it to disk."""
+def _refresh() -> tuple[dict, list]:
+    """Download all.json; build the barcode index + brand-name list; cache both."""
     resp = requests.get(OFD_ALL_URL, timeout=60)
     resp.raise_for_status()
-    index = _build_index(resp.json())
+    all_json = resp.json()
+    index = _build_index(all_json)
+    brands = sorted({b["name"] for b in all_json.get("brands", []) if b.get("name")})
     try:
-        OFD_CACHE.write_text(json.dumps({"built_at": time.time(), "index": index}))
+        OFD_CACHE.write_text(json.dumps({"built_at": time.time(), "index": index, "brands": brands}))
     except Exception:
         pass
-    return index
+    return index, brands
+
+
+def _ensure_loaded(force: bool = False):
+    global _INDEX, _BRANDS, _INDEX_LOADED_AT
+    if _INDEX is not None and not force and (time.time() - _INDEX_LOADED_AT) < OFD_TTL_SECONDS:
+        return
+    loaded = None if force else _load_cached()
+    if loaded is None:
+        loaded = _refresh()
+    _INDEX, _BRANDS = loaded
+    _INDEX_LOADED_AT = time.time()
 
 
 def get_index(force: bool = False) -> dict:
     """Return the barcode→fields index (memory → disk cache → download)."""
-    global _INDEX, _INDEX_LOADED_AT
-    if _INDEX is not None and not force and (time.time() - _INDEX_LOADED_AT) < OFD_TTL_SECONDS:
-        return _INDEX
-    idx = None if force else _load_cached_index()
-    if idx is None:
-        idx = _refresh_index()
-    _INDEX = idx
-    _INDEX_LOADED_AT = time.time()
-    return _INDEX
+    _ensure_loaded(force)
+    return _INDEX or {}
+
+
+def get_brands() -> list:
+    """Return the OFD brand-name list (for data-driven brand detection)."""
+    try:
+        _ensure_loaded()
+    except Exception:
+        return []
+    return _BRANDS or []
 
 
 def lookup(barcode: str) -> dict | None:

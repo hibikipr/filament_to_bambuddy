@@ -195,7 +195,8 @@ def lookup():
         return jsonify(barcode=barcode, source="none",
                        fields={"label_weight": DEFAULT_LABEL_WEIGHT}, title=None)
 
-    fields = parse_title(hit.get("title", ""), brand_hint=hit.get("brand") or None)
+    fields = parse_title(hit.get("title", ""), brand_hint=hit.get("brand") or None,
+                         extra_brands=ofd.get_brands())
     fields.setdefault("label_weight", DEFAULT_LABEL_WEIGHT)
     return jsonify(barcode=barcode, source="upc", title=hit.get("title", ""), fields=fields)
 
@@ -204,10 +205,15 @@ def lookup():
 def parse_endpoint():
     """Parse a free-text product title into filament fields (the 'paste title' helper)."""
     from filament_parse import parse_title
+    import ofd
     title = (request.args.get("title") or "").strip()
     if not title:
         return jsonify(fields={})
-    fields = parse_title(title)
+    try:
+        brands = ofd.get_brands()
+    except Exception:
+        brands = []
+    fields = parse_title(title, extra_brands=brands)
     return jsonify(fields=fields, title=title)
 
 

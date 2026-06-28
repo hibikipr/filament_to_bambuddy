@@ -100,7 +100,11 @@
       <div><input id="paste_title" placeholder="e.g. SUNLU PLA+ 1.75mm Black 1KG"></div>
       <div style="flex:0 0 96px"><button id="autofillBtn" type="button" class="btn-secondary">✨ Fill</button></div>
     </div>
-    <div class="hint" style="margin-bottom:6px">Copy the listing name from Amazon/the store and tap Fill.</div>
+    <div class="hint" style="margin-bottom:6px">
+      Find the listing, copy its name, tap Fill.
+      <a id="searchLink" href="#" target="_blank" rel="noopener"
+         style="color:var(--green-light)">🔍 Search the web for this code</a>
+    </div>
 
     <label>Material *</label>
     <input id="material" placeholder="PLA, PETG, ABS…" required>
@@ -248,6 +252,10 @@ function fillForm(d){
   $('barcodeLine').innerHTML = d.barcode
     ? 'Barcode: <span style="color:var(--fg);font-family:Menlo,monospace">'+d.barcode+'</span>' : '';
   $('titleLine').textContent = d.title || '';
+  // Point the web-search link at the scanned code (helps when no DB has it).
+  const code = d.barcode || currentBarcode || '';
+  $('searchLink').href = 'https://www.google.com/search?q='+encodeURIComponent('"'+code+'" filament');
+  $('searchLink').style.display = code ? '' : 'none';
   // reset then apply
   ['brand','subtype','color_name','storage_location','category',
    'nozzle_temp_min','nozzle_temp_max','cost_per_kg','note','paste_title'].forEach(id=>$(id).value='');

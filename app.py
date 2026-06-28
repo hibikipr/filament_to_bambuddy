@@ -201,9 +201,29 @@ def lookup():
     return jsonify(barcode=barcode, source="upc", title=hit.get("title", ""), fields=fields)
 
 
+def _extract_barcode(text: str) -> str | None:
+    """Pull a barcode (UPC/EAN/GTIN) out of free text, e.g. label OCR.
+
+    Prefers a labelled number ("EAN: 6938936716785"); falls back to any bare
+    12–14 digit run. Returns digits only, or None.
+    """
+    import re
+    m = re.search(r"(?:EAN|UPC|GTIN|BARCODE)\s*[:#]?\s*(\d[\d\s]{6,16}\d)", text, re.I)
+    cand = re.sub(r"\D", "", m.group(1)) if m else None
+    if not cand:
+        m = re.search(r"(?<!\d)(\d{12,14})(?!\d)", text)
+        cand = m.group(1) if m else None
+    return cand if cand and 8 <= len(cand) <= 14 else None
+
+
 @app.get("/api/parse")
 def parse_endpoint():
-    """Parse a free-text product title into filament fields (the 'paste title' helper)."""
+    """Parse free text (pasted title or label OCR) into filament fields.
+
+    Heuristically parses the text, and if a barcode is present in it, looks that
+    barcode up in the Open Filament Database — authoritative OFD data overrides
+    the guesses when found.
+    """
     from filament_parse import parse_title
     import ofd
     title = (request.args.get("title") or "").strip()
@@ -214,7 +234,18 @@ def parse_endpoint():
     except Exception:
         brands = []
     fields = parse_title(title, extra_brands=brands)
-    return jsonify(fields=fields, title=title)
+
+    source, out_title = "parsed", title
+    barcode = _extract_barcode(title)
+    if barcode:
+        ofd_fields = ofd.lookup(barcode)
+        if ofd_fields:
+            fields = {**fields, **{k: v for k, v in ofd_fields.items() if not k.startswith("_")}}
+            source = "ofd"
+            out_title = ofd_fields.get("_title") or title
+
+    fields.setdefault("label_weight", DEFAULT_LABEL_WEIGHT)
+    return jsonify(fields=fields, title=out_title, barcode=barcode, source=source)
 
 
 @app.post("/api/spool")

@@ -289,7 +289,10 @@ $('labelPhoto').onchange = async (e) => {
     const text = (data.text||'').replace(/\s+/g,' ').trim();
     if(!text){ $('ocrHint').textContent='No text found — try a clearer, closer photo.'; return; }
     const d = await (await fetch('/api/parse?title='+encodeURIComponent(text))).json();
-    fillForm({ source:'label', barcode: currentBarcode, title: text.slice(0,140),
+    if(d.barcode) currentBarcode = d.barcode;   // remember by the label's barcode
+    fillForm({ source: d.source==='ofd' ? 'ofd' : 'label',
+               barcode: d.barcode || currentBarcode,
+               title: d.title || text.slice(0,140),
                fields: Object.assign({label_weight:1000}, d.fields||{}) });
     $('ocrHint').textContent='';
   }catch(err){ $('ocrHint').textContent='OCR failed: '+err; }
@@ -303,6 +306,10 @@ $('autofillBtn').onclick = async () => {
   try{
     const d = await (await fetch('/api/parse?title='+encodeURIComponent(t))).json();
     applyFields(d.fields||{});
+    if(d.barcode){
+      currentBarcode = d.barcode;
+      $('barcodeLine').innerHTML = 'Barcode: <span style="color:var(--fg);font-family:Menlo,monospace">'+d.barcode+'</span>';
+    }
     if(!Object.keys(d.fields||{}).length) toast('Couldn\'t parse that title', false);
   }catch(e){ toast('Parse failed', false); }
 };

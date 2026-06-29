@@ -402,6 +402,45 @@ function fillForm(d){
 function loadScript(src){
   return new Promise((res,rej)=>{ const s=document.createElement('script'); s.src=src; s.onload=res; s.onerror=rej; document.head.appendChild(s); });
 }
+function loadImage(file){
+  return new Promise((res,rej)=>{ const img=new Image(); img.onload=()=>res(img); img.onerror=rej; img.src=URL.createObjectURL(file); });
+}
+// Draw the image rotated by `deg`, downscaled to maxDim for speed.
+function rotatedCanvas(img, deg, maxDim){
+  const scale=Math.min(1, maxDim/Math.max(img.width,img.height));
+  const w=Math.round(img.width*scale), h=Math.round(img.height*scale);
+  const swap = (deg===90||deg===270);
+  const c=document.createElement('canvas'); c.width=swap?h:w; c.height=swap?w:h;
+  const ctx=c.getContext('2d');
+  ctx.translate(c.width/2, c.height/2); ctx.rotate(deg*Math.PI/180);
+  ctx.drawImage(img, -w/2, -h/2, w, h);
+  return c;
+}
+// Score recognised text: more letters is better; big bonus for filament cues.
+function scoreText(t){
+  const letters=(t.match(/[A-Za-z]/g)||[]).length;
+  const cue=/\b(PLA|PETG|PCTG|ABS|ASA|TPU|nylon|temp|filament|spool|silk|matte|dual|sunlu|esun|polymaker|panchroma|hatchbox|overture)\b/i.test(t)
+    || /\d{2,3}\s*[-~]\s*\d{2,3}/.test(t);
+  return letters + (cue?80:0);
+}
+// OCR the photo trying each orientation; keep the best (handles sideways/upside-down).
+async function ocrBestOrientation(file){
+  const img=await loadImage(file);
+  let best={text:'', score:-1};
+  for(const deg of [0,90,270,180]){
+    const label = deg ? ' (rotated '+deg+'°)' : '';
+    const canvas=rotatedCanvas(img, deg, 1600);
+    const { data } = await Tesseract.recognize(canvas, 'eng', { logger: m => {
+      if(m.status==='recognizing text') $('ocrHint').textContent='Reading label'+label+'… '+Math.round(m.progress*100)+'%';
+    }});
+    const text=(data.text||'').replace(/\s+/g,' ').trim();
+    const score=scoreText(text);
+    if(score>best.score) best={text,score};
+    if(score>=120) break;   // strong result — no need to try more rotations
+  }
+  return best.text;
+}
+
 $('ocrBtn').onclick = () => $('labelPhoto').click();
 $('labelPhoto').onchange = async (e) => {
   const file = e.target.files[0]; if(!file) return;
@@ -411,10 +450,7 @@ $('labelPhoto').onchange = async (e) => {
       await loadScript('https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js');
     }
     $('ocrHint').textContent='Reading label…';
-    const { data } = await Tesseract.recognize(file, 'eng', { logger: m => {
-      if(m.status==='recognizing text') $('ocrHint').textContent='Reading label… '+Math.round(m.progress*100)+'%';
-    }});
-    const text = (data.text||'').replace(/\s+/g,' ').trim();
+    const text = await ocrBestOrientation(file);
     if(!text){ $('ocrHint').textContent='No text found — try a clearer, closer photo.'; return; }
     const d = await (await fetch('/api/parse?title='+encodeURIComponent(text))).json();
     if(d.barcode) currentBarcode = d.barcode;   // remember by the label's barcode

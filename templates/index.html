@@ -85,6 +85,7 @@
       <button id="refreshDb" class="btn-secondary" style="flex:0 0 auto;width:auto;padding:8px 12px;font-size:13px">⟳ Refresh DB</button>
     </div>
     <div id="refreshHint" class="hint"></div>
+    <div style="margin-top:6px"><a id="clearCache" href="#" style="color:var(--muted);font-size:12px">🗑 Clear remembered lookups</a></div>
   </div>
 
   <!-- Scan -->
@@ -109,6 +110,7 @@
   <form id="form" class="card hidden">
     <div style="font-weight:600;margin-bottom:4px">
       Filament details <span id="srcBadge" class="badge"></span>
+      <a id="forgetBtn" href="#" class="hidden" style="float:right;font-size:12px;color:var(--muted)">🗑 Forget</a>
     </div>
     <div id="barcodeLine" class="muted" style="margin-bottom:2px"></div>
     <div id="titleLine" class="muted" style="margin-bottom:8px"></div>
@@ -280,6 +282,28 @@ $('refreshDb').onclick = async () => {
   finally{ $('refreshDb').disabled=false; }
 };
 
+// Clear ALL remembered lookups.
+$('clearCache').onclick = async (e) => {
+  e.preventDefault();
+  if(!confirm('Forget all remembered barcode lookups? (The Open Filament Database is unaffected.)')) return;
+  try{
+    const d = await (await fetch('/api/cache', {method:'DELETE'})).json();
+    toast('Cleared '+(d.cleared||0)+' remembered lookup'+(d.cleared===1?'':'s'));
+  }catch(e){ toast('Clear failed', false); }
+};
+
+// Forget just the current barcode.
+$('forgetBtn').onclick = async (e) => {
+  e.preventDefault();
+  if(!currentBarcode) return;
+  try{
+    await fetch('/api/cache/'+encodeURIComponent(currentBarcode), {method:'DELETE'});
+    toast('Forgotten — it won\'t auto-fill next time');
+    $('forgetBtn').classList.add('hidden');
+    $('srcBadge').className='badge'; $('srcBadge').textContent='entered manually';
+  }catch(e){ toast('Failed', false); }
+};
+
 // ── Scanning ──
 $('startBtn').onclick = async () => {
   if(!window.ZXingBrowser){ toast('Scanner library failed to load', false); return; }
@@ -363,6 +387,8 @@ function fillForm(d){
   const code = d.barcode || currentBarcode || '';
   $('searchLink').href = 'https://www.google.com/search?q='+encodeURIComponent('"'+code+'" filament');
   $('searchLink').style.display = code ? '' : 'none';
+  // 'Forget' only makes sense for a remembered (cache) entry with a barcode.
+  $('forgetBtn').classList.toggle('hidden', !(code && d.source==='cache'));
   // reset then apply
   ['brand','color_name','category','nozzle_temp_min','nozzle_temp_max',
    'cost_per_kg','note','paste_title'].forEach(id=>$(id).value='');

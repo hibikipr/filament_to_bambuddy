@@ -165,6 +165,25 @@ def options():
                    locations=_bambuddy_locations())
 
 
+@app.delete("/api/cache")
+def clear_cache():
+    """Forget ALL remembered per-barcode lookups."""
+    n = len(load_cache())
+    save_cache({})
+    return jsonify(ok=True, cleared=n)
+
+
+@app.delete("/api/cache/<barcode>")
+def forget_barcode(barcode):
+    """Forget the remembered entry for one barcode."""
+    cache = load_cache()
+    existed = barcode in cache
+    if existed:
+        del cache[barcode]
+        save_cache(cache)
+    return jsonify(ok=True, removed=existed)
+
+
 @app.post("/api/ofd/refresh")
 def ofd_refresh():
     """Force a re-download/rebuild of the Open Filament Database index."""

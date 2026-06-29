@@ -1,0 +1,20 @@
+services:
+  filament-to-bambuddy:
+    build: .
+    # Or, once you publish an image:
+    # image: ghcr.io/hibikipr/filament_to_bambuddy:latest
+    container_name: filament_to_bambuddy
+    restart: unless-stopped
+    ports:
+      - "8088:8088"
+    # Config comes from a .env file beside this compose file (gitignored):
+    #   BAMBUDDY_URL=https://your-bambuddy.example.com
+    #   BAMBUDDY_API_KEY=bb_xxx
+    #   # optional: DEFAULT_LABEL_WEIGHT, UPC_LOOKUP_URL, UPC_API_KEY
+    env_file:
+      - .env
+    volumes:
+      - filament_data:/data   # persists barcode_cache.json + ofd_index.json
+
+volumes:
+  filament_data:

@@ -1,0 +1,15 @@
+.git
+.gitignore
+__pycache__/
+*.pyc
+.venv/
+venv/
+run.sh
+.env
+*.local
+barcode_cache.json
+ofd_index.json
+.DS_Store
+.idea/
+.vscode/
+README.md

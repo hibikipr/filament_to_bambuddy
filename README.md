@@ -86,6 +86,36 @@ To enable the camera, serve the app over HTTPS, e.g.:
   way Bambuddy itself is exposed, **or**
 - a local HTTPS tunnel (e.g. `cloudflared`, `ngrok`).
 
+### Run with Docker (in a stack)
+
+A `Dockerfile` and `docker-compose.yml` are included. It runs under **gunicorn**
+and persists its caches (`barcode_cache.json`, `ofd_index.json`) to a volume.
+
+```bash
+cp .env.example .env      # then edit .env with your BAMBUDDY_URL + API key
+docker compose up -d --build
+```
+
+The app is then on port **8088**. To add it to an existing stack, drop this
+service into your compose (point `env_file` or `environment` at your config):
+
+```yaml
+  filament-to-bambuddy:
+    build: ./filament_to_bambuddy      # or image: <your-built-image>
+    restart: unless-stopped
+    ports: ["8088:8088"]
+    env_file: [./filament_to_bambuddy/.env]
+    volumes: ["filament_data:/data"]
+# (add `filament_data:` under your top-level `volumes:`)
+```
+
+For the **camera** and **PWA install** you still need HTTPS — route this
+container through the same reverse proxy (Traefik / nginx / Caddy / Cloudflare
+Tunnel) you use for Bambuddy, with its own hostname.
+
+Docker-specific env vars: `OFD_CACHE_FILE` and `BARCODE_CACHE_FILE` default to
+`/data/...` in the image so the caches land on the mounted volume.
+
 ### Configuration (environment variables)
 
 | Variable | Default | Description |
@@ -96,6 +126,7 @@ To enable the camera, serve the app over HTTPS, e.g.:
 | `UPC_API_KEY` | — | Key for a paid UPC provider (optional) |
 | `DEFAULT_LABEL_WEIGHT` | `1000` | Net grams assumed when unknown |
 | `BARCODE_CACHE_FILE` | `barcode_cache.json` | Where learned lookups are stored |
+| `OFD_CACHE_FILE` | `ofd_index.json` | Where the OFD index is cached |
 | `HOST` / `PORT` | `0.0.0.0` / `8088` | Server bind address |
 
 The Open Filament Database dump is downloaded once and cached in

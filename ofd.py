@@ -11,6 +11,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 """
 
 import json
+import os
 import re
 import time
 from pathlib import Path
@@ -18,7 +19,7 @@ from pathlib import Path
 import requests
 
 OFD_ALL_URL = "https://api.openfilamentdatabase.org/json/all.json"
-OFD_CACHE = Path("ofd_index.json")
+OFD_CACHE = Path(os.getenv("OFD_CACHE_FILE", "ofd_index.json"))
 OFD_TTL_SECONDS = 24 * 3600
 
 # In-process cache so we don't rebuild on every request.

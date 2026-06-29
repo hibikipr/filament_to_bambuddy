@@ -418,12 +418,15 @@ $('labelPhoto').onchange = async (e) => {
     if(!text){ $('ocrHint').textContent='No text found — try a clearer, closer photo.'; return; }
     const d = await (await fetch('/api/parse?title='+encodeURIComponent(text))).json();
     if(d.barcode) currentBarcode = d.barcode;   // remember by the label's barcode
-    fillForm({ source: d.source==='ofd' ? 'ofd' : 'label',
+    const fields = Object.assign({label_weight:1000}, d.fields||{});
+    // Did OCR yield anything beyond the default weight?
+    const got = !!d.barcode || Object.keys(fields).some(k => k!=='label_weight');
+    fillForm({ source: d.source==='ofd' ? 'ofd' : (got ? 'label' : 'none'),
                barcode: d.barcode || currentBarcode,
-               // Only show a clean title (OFD); never dump the raw OCR text.
-               title: d.source==='ofd' ? (d.title||'') : '',
-               fields: Object.assign({label_weight:1000}, d.fields||{}) });
-    $('ocrHint').textContent='';
+               title: d.source==='ofd' ? (d.title||'') : '',  // never dump raw OCR text
+               fields });
+    $('ocrHint').textContent = got ? ''
+      : 'Couldn\'t read the label clearly. Try a closer, flatter, well-lit photo of the spec text — or fill in the details below.';
   }catch(err){ $('ocrHint').textContent='OCR failed: '+err; }
   finally{ e.target.value=''; }
 };

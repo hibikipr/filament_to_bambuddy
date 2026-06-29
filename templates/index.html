@@ -25,7 +25,8 @@
   body{margin:0;background:var(--bg);color:var(--fg);
     font-family:Inter,system-ui,-apple-system,"Segoe UI",sans-serif;
     -webkit-text-size-adjust:100%;overscroll-behavior-y:contain}
-  #ptr{position:fixed;top:0;left:0;right:0;height:56px;padding-top:env(safe-area-inset-top);
+  #ptr{position:fixed;top:0;left:0;right:0;height:calc(56px + env(safe-area-inset-top));
+    padding-top:env(safe-area-inset-top);
     display:flex;align-items:center;justify-content:center;gap:8px;color:var(--muted);
     font-size:13px;background:var(--bg);transform:translateY(-100%);z-index:30;pointer-events:none}
   #ptrIcon{font-size:18px;display:inline-block;transition:transform .15s}

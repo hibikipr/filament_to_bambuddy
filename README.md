@@ -96,6 +96,17 @@ cp .env.example .env      # then edit .env with your BAMBUDDY_URL + API key
 docker compose up -d --build
 ```
 
+**Prebuilt image:** a GitHub Actions workflow publishes a multi-arch image
+(amd64 + arm64) to **GHCR** on every push to `main` and on `v*` tags. Pull it
+instead of building:
+
+```yaml
+    image: ghcr.io/hibikipr/filament_to_bambuddy:latest
+```
+
+(After the first publish, set the package's visibility to **Public** in your
+GitHub package settings if you want to pull it without authenticating.)
+
 The app is then on port **8088**. To add it to an existing stack, drop this
 service into your compose (point `env_file` or `environment` at your config):
 

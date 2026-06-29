@@ -39,7 +39,8 @@ SUBTYPE_HINTS = [
     ("CARBON", "Carbon Fiber"), ("GLOW IN THE DARK", "Glow"), ("GLOW", "Glow"),
     ("SILK", "Silk"), ("MATTE", "Matte"), ("MARBLE", "Marble"), ("WOOD", "Wood"),
     ("METAL", "Metal"), ("RAINBOW", "Rainbow"), ("GRADIENT", "Gradient"),
-    ("DUAL COLOR", "Dual Color"), ("TRI COLOR", "Tri Color"),
+    ("DUAL COLOR", "Dual Color"), ("DUAL COLOUR", "Dual Color"), ("DUAL", "Dual Color"),
+    ("TRI COLOR", "Tri Color"), ("TRI COLOUR", "Tri Color"),
     ("HIGH SPEED", "High Speed"), ("HYPER", "High Speed"), ("TOUGH", "Tough"),
     ("GALAXY", "Galaxy"), ("SPARKLE", "Sparkle"), ("GLITTER", "Glitter"),
     ("LUMINOUS", "Luminous"), ("FLUORESCENT", "Fluorescent"),
@@ -109,6 +110,14 @@ def _find_subtypes(text_upper: str) -> list[str]:
 
 
 def _find_color(text: str) -> tuple[str | None, str | None]:
+    # Dual colour first: "Grey-Orange", "Black/White" → keep both names; rgba
+    # from the first colour (a single swatch can't show two).
+    cw = "|".join(re.escape(w) for w in _COLOR_WORDS)
+    m = re.search(rf"\b({cw})\s*[-/]\s*({cw})\b", text, re.IGNORECASE)
+    if m:
+        c1, c2 = m.group(1).title(), m.group(2).title()
+        rgba = COLOR_HEX.get(c1)
+        return f"{c1}-{c2}", (rgba + "FF") if rgba else None
     for word in _COLOR_WORDS:
         if re.search(rf"\b{re.escape(word)}\b", text, re.IGNORECASE):
             return word, COLOR_HEX[word] + "FF"   # RRGGBBAA, opaque
@@ -141,6 +150,13 @@ def _find_nozzle_temps(text: str) -> tuple[int, int] | None:
         t = int(m.group(1))
         if 140 <= t <= 360:
             return t, t
+    # Bare range in the nozzle band — OCR often drops the "°C" (turning it into
+    # a quote/garbage). Constrain to a plausible printing-temp window + spread so
+    # random number ranges don't match.
+    for lo, hi in re.findall(r"(?<!\d)(\d{2,3})\s*[-–~]\s*(\d{2,3})(?!\d)", text):
+        lo, hi = int(lo), int(hi)
+        if 150 <= lo <= hi <= 320 and 5 <= hi - lo <= 120:
+            return lo, hi
     return None
 
 

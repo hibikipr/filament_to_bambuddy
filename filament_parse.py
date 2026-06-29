@@ -88,9 +88,13 @@ def _find_brand(text_upper: str, extra_brands=None) -> str | None:
 
 
 def _find_material(text_upper: str) -> tuple[str | None, str | None]:
-    """Return (material, subtype_from_plus). Detects PLA+ → material PLA, subtype Plus."""
+    """Return (material, subtype_from_plus). Detects PLA+ → material PLA, subtype Plus.
+
+    Uses letter boundaries so short tokens (PA, PC, PET…) don't false-match inside
+    brand names — e.g. 'PA' must not fire on 'PAnchroma'.
+    """
     for token, canonical in BASE_MATERIALS:
-        if token in text_upper:
+        if re.search(r"(?<![A-Z])" + re.escape(token) + r"(?![A-Z])", text_upper):
             sub = "Plus" if token.endswith("+") or token.endswith("PLUS") else None
             return canonical, sub
     return None, None
@@ -117,6 +121,33 @@ def _find_diameter(text: str) -> float | None:
         return float(m.group(1))
     m = re.search(r"\b(1\.75|2\.85)\b", text)
     return float(m.group(1)) if m else None
+
+
+def _find_nozzle_temps(text: str) -> tuple[int, int] | None:
+    """Pull the nozzle/printing temperature (°C) out of label text.
+
+    Distinguishes nozzle from bed by VALUE, not by adjacent label — OCR often
+    scrambles multi-column spec blocks (so "Printing Temp" can sit next to the
+    bed value). Nozzle/hotend temps are >=140°C; bed temps are well below that.
+    Returns (min, max), or None.
+    """
+    # All "NN-NN°C" ranges; pick the one in the nozzle band.
+    for lo, hi in re.findall(r"(\d{2,3})\s*[-–~]\s*(\d{2,3})\s*°?\s*[cC]\b", text):
+        lo, hi = int(lo), int(hi)
+        if 140 <= lo and hi <= 360 and lo <= hi:
+            return lo, hi
+    # Single value fallback (e.g. "Nozzle 210°C").
+    for m in re.finditer(r"(\d{2,3})\s*°?\s*[cC]\b", text):
+        t = int(m.group(1))
+        if 140 <= t <= 360:
+            return t, t
+    return None
+
+
+def _find_hex(text: str) -> str | None:
+    """First #RRGGBB in the text → RRGGBBAA (opaque). Labels often print it."""
+    m = re.search(r"#([0-9A-Fa-f]{6})\b", text)
+    return m.group(1).upper() + "FF" if m else None
 
 
 def _find_weight_grams(text: str) -> int | None:
@@ -161,6 +192,14 @@ def parse_title(title: str, brand_hint: str | None = None, extra_brands=None) ->
     if color_name:
         out["color_name"] = color_name
         out["rgba"] = rgba
+    # An explicit hex on the label is authoritative for the colour swatch.
+    hex_rgba = _find_hex(text)
+    if hex_rgba:
+        out["rgba"] = hex_rgba
+
+    temps = _find_nozzle_temps(text)
+    if temps:
+        out["nozzle_temp_min"], out["nozzle_temp_max"] = temps
 
     diameter = _find_diameter(text)
     if diameter:

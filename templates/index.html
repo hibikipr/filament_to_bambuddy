@@ -25,9 +25,9 @@
   body{margin:0;background:var(--bg);color:var(--fg);
     font-family:Inter,system-ui,-apple-system,"Segoe UI",sans-serif;
     -webkit-text-size-adjust:100%;overscroll-behavior-y:contain}
-  #ptr{position:fixed;top:0;left:0;right:0;height:56px;display:flex;align-items:center;
-    justify-content:center;gap:8px;color:var(--muted);font-size:13px;background:var(--bg);
-    transform:translateY(-56px);z-index:30;pointer-events:none}
+  #ptr{position:fixed;top:0;left:0;right:0;height:56px;padding-top:env(safe-area-inset-top);
+    display:flex;align-items:center;justify-content:center;gap:8px;color:var(--muted);
+    font-size:13px;background:var(--bg);transform:translateY(-100%);z-index:30;pointer-events:none}
   #ptrIcon{font-size:18px;display:inline-block;transition:transform .15s}
   @keyframes ptrspin{to{transform:rotate(360deg)}}
   header{padding:16px;padding-top:calc(16px + env(safe-area-inset-top));
@@ -35,7 +35,8 @@
     border-bottom:1px solid #333;position:sticky;top:0;background:var(--bg);z-index:5}
   header h1{font-size:18px;margin:0;font-weight:600}
   .cube{width:26px;height:26px;flex:0 0 auto}
-  main{padding:16px;max-width:560px;margin:0 auto;padding-bottom:48px}
+  main{padding:16px;max-width:560px;margin:0 auto;
+    padding-bottom:calc(48px + env(safe-area-inset-bottom))}
   .card{background:var(--card);border-radius:var(--radius);padding:16px;margin-bottom:16px}
   .muted{color:var(--muted);font-size:13px}
   label{display:block;font-size:13px;color:var(--muted);margin:10px 0 4px}
@@ -186,8 +187,9 @@ if('serviceWorker' in navigator && window.isSecureContext){
     pull = e.touches[0].clientY - startY;
     if(pull>0 && atTop()){
       e.preventDefault();                       // take over the gesture
+      const H = ptr.offsetHeight || 56;         // includes the safe-area inset
       const off = Math.min(pull*0.55, 72);      // resistance
-      ptr.style.transform = 'translateY('+(off-56)+'px)';
+      ptr.style.transform = 'translateY('+(off-H)+'px)';
       const past = pull>=TRIGGER;
       icon.style.transform = past ? 'rotate(180deg)' : 'rotate(0deg)';
       txt.textContent = past ? 'Release to refresh' : 'Pull to refresh';
@@ -203,7 +205,7 @@ if('serviceWorker' in navigator && window.isSecureContext){
       icon.style.animation='ptrspin .8s linear infinite';
       setTimeout(()=>location.reload(), 350);
     } else {
-      ptr.style.transform='translateY(-56px)';
+      ptr.style.transform='translateY(-100%)';
     }
     pull=0;
   });

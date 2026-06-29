@@ -1,5 +1,7 @@
 # filament_to_bambuddy
 
+[![Build and publish image](https://github.com/hibikipr/filament_to_bambuddy/actions/workflows/docker-publish.yml/badge.svg)](https://github.com/hibikipr/filament_to_bambuddy/actions/workflows/docker-publish.yml)
+
 Scan a third-party filament box barcode with your phone and add the new spool to
 your [Bambuddy](https://github.com/) filament inventory.
 

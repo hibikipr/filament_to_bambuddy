@@ -393,7 +393,8 @@ $('labelPhoto').onchange = async (e) => {
     if(d.barcode) currentBarcode = d.barcode;   // remember by the label's barcode
     fillForm({ source: d.source==='ofd' ? 'ofd' : 'label',
                barcode: d.barcode || currentBarcode,
-               title: d.title || text.slice(0,140),
+               // Only show a clean title (OFD); never dump the raw OCR text.
+               title: d.source==='ofd' ? (d.title||'') : '',
                fields: Object.assign({label_weight:1000}, d.fields||{}) });
     $('ocrHint').textContent='';
   }catch(err){ $('ocrHint').textContent='OCR failed: '+err; }

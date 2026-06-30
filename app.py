@@ -24,11 +24,19 @@ if sys.version_info < (3, 10):
     sys.exit(f"❌ Python 3.10+ required (this is {sys.version.split()[0]}).")
 
 import json
+import logging
 import os
 from pathlib import Path
 
 import requests
 from flask import Flask, jsonify, render_template, request
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(message)s",
+    datefmt="%Y-%m-%dT%H:%M:%S",
+)
+log = logging.getLogger(__name__)
 
 # ── Config (env vars) ─────────────────────────────────────────────────────────
 
@@ -141,6 +149,7 @@ def clear_cache():
     """Forget ALL remembered per-barcode lookups."""
     n = len(load_cache())
     save_cache({})
+    log.info("cache cleared: %d entries removed", n)
     return jsonify(ok=True, cleared=n)
 
 
@@ -152,6 +161,7 @@ def forget_barcode(barcode):
     if existed:
         del cache[barcode]
         save_cache(cache)
+        log.info("cache forget: %s", barcode)
     return jsonify(ok=True, removed=existed)
 
 
@@ -159,10 +169,14 @@ def forget_barcode(barcode):
 def ofd_refresh():
     """Force a re-download/rebuild of the Open Filament Database index."""
     import ofd
+    log.info("OFD refresh started")
     try:
         idx = ofd.get_index(force=True)
-        return jsonify(ok=True, barcodes=len(idx), brands=len(ofd.get_brands()))
+        brands = len(ofd.get_brands())
+        log.info("OFD refresh done: %d barcodes, %d brands", len(idx), brands)
+        return jsonify(ok=True, barcodes=len(idx), brands=brands)
     except Exception as e:
+        log.error("OFD refresh failed: %s", e)
         return jsonify(ok=False, error=str(e)), 502
 
 
@@ -212,6 +226,7 @@ def lookup():
     # 1. Personal cache — your own confirmed entries win.
     cache = load_cache()
     if barcode in cache:
+        log.info("lookup %s: cache hit", barcode)
         return jsonify(barcode=barcode, source="cache", fields=cache[barcode], title=None)
 
     # 2. Open Filament Database — filament-specific, keyed by spool barcode (GTIN).
@@ -220,11 +235,13 @@ def lookup():
     if ofd_fields:
         fields = {k: v for k, v in ofd_fields.items() if not k.startswith("_")}
         fields.setdefault("label_weight", DEFAULT_LABEL_WEIGHT)
+        log.info("lookup %s: OFD hit — %s", barcode, ofd_fields.get("_title", ""))
         return jsonify(barcode=barcode, source="ofd",
                        title=ofd_fields.get("_title"), fields=fields)
 
     # 3. Not found — fill in manually (and it'll be remembered).
     src = "amazon" if not barcode.isdigit() else "none"
+    log.info("lookup %s: not found (source=%s)", barcode, src)
     return jsonify(barcode=barcode, source=src,
                    fields={"label_weight": DEFAULT_LABEL_WEIGHT}, title=None)
 
@@ -335,6 +352,14 @@ def add_spool():
         save_cache(cache)
 
     ok = created == quantity
+    material = payload.get("material", "?")
+    brand = payload.get("brand", "")
+    label = f"{brand} {material}".strip() if brand else material
+    if ok:
+        log.info("spool added: %dx %s (barcode=%s)", created, label, barcode or "none")
+    else:
+        log.warning("spool add partial: %d/%d %s (barcode=%s) errors=%s",
+                    created, quantity, label, barcode or "none", errors)
     return jsonify(ok=ok, created=created, requested=quantity,
                    errors=errors, bambuddy=BAMBUDDY_URL), (200 if created else 502)
 

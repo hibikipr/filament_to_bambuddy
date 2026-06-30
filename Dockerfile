@@ -23,4 +23,5 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
   CMD python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8088/',timeout=4).status==200 else 1)"
 
 # One worker (shared in-memory OFD index) + threads for the blocking HTTP calls.
-CMD ["gunicorn", "-b", "0.0.0.0:8088", "-w", "1", "--threads", "8", "--timeout", "120", "app:app"]
+# --access-logfile - sends HTTP access logs to stdout so they appear in docker logs.
+CMD ["gunicorn", "-b", "0.0.0.0:8088", "-w", "1", "--threads", "8", "--timeout", "120", "--access-logfile", "-", "app:app"]

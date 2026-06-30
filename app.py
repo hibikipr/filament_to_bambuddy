@@ -3,8 +3,8 @@
 filament_to_bambuddy — app.py
 
 A small mobile web app: scan a third-party filament box barcode with your phone,
-look up the product (online UPC database + a learning per-barcode cache), review
-the auto-filled details, and add the spool to your Bambuddy inventory.
+look up the product (Open Filament Database + a learning per-barcode cache),
+review the auto-filled details, and add the spool to your Bambuddy inventory.
 
 Run:
     pip install flask requests
@@ -34,11 +34,6 @@ from flask import Flask, jsonify, render_template, request
 
 BAMBUDDY_URL = os.getenv("BAMBUDDY_URL", "http://localhost:8000").rstrip("/")
 BAMBUDDY_API_KEY = os.getenv("BAMBUDDY_API_KEY", "")
-
-# UPC lookup provider. Default is UPCItemDB's keyless trial endpoint (rate
-# limited: ~100/day). Set UPC_LOOKUP_URL + UPC_API_KEY to use another provider.
-UPC_LOOKUP_URL = os.getenv("UPC_LOOKUP_URL", "https://api.upcitemdb.com/prod/trial/lookup")
-UPC_API_KEY = os.getenv("UPC_API_KEY", "")
 
 DEFAULT_LABEL_WEIGHT = int(os.getenv("DEFAULT_LABEL_WEIGHT", "1000"))
 CACHE_FILE = Path(os.getenv("BARCODE_CACHE_FILE", "barcode_cache.json"))
@@ -70,30 +65,6 @@ def load_cache() -> dict:
 
 def save_cache(cache: dict):
     CACHE_FILE.write_text(json.dumps(cache, indent=2))
-
-
-# ── UPC lookup ────────────────────────────────────────────────────────────────
-
-def upc_lookup(barcode: str) -> dict | None:
-    """Query the configured UPC provider; return {title, brand} or None."""
-    try:
-        headers = {"Accept": "application/json"}
-        if UPC_API_KEY:
-            headers["user_key"] = UPC_API_KEY  # UPCItemDB paid; harmless otherwise
-        resp = requests.get(UPC_LOOKUP_URL, params={"upc": barcode}, headers=headers, timeout=15)
-        if not resp.ok:
-            return {"_error": f"UPC lookup returned {resp.status_code}"}
-        data = resp.json()
-        items = data.get("items") or data.get("products") or []
-        if not items:
-            return None
-        item = items[0]
-        return {
-            "title": item.get("title") or item.get("name") or "",
-            "brand": item.get("brand") or "",
-        }
-    except Exception as e:
-        return {"_error": str(e)}
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
@@ -233,9 +204,7 @@ def health():
 
 @app.get("/api/lookup")
 def lookup():
-    """Resolve a barcode to filament fields: cache first, then UPC API + parse."""
-    from filament_parse import parse_title
-
+    """Resolve a barcode to filament fields: cache first, then the Open Filament Database."""
     barcode = (request.args.get("barcode") or "").strip()
     if not barcode:
         return jsonify(error="barcode required"), 400
@@ -254,25 +223,10 @@ def lookup():
         return jsonify(barcode=barcode, source="ofd",
                        title=ofd_fields.get("_title"), fields=fields)
 
-    # 3. Non-numeric (Amazon ASIN etc.) → UPC databases reject these; go manual.
-    if not barcode.isdigit():
-        return jsonify(barcode=barcode, source="amazon",
-                       fields={"label_weight": DEFAULT_LABEL_WEIGHT}, title=None)
-
-    # 4. Generic UPC database (coverage for filament is patchy).
-    hit = upc_lookup(barcode)
-    if hit and "_error" in hit:
-        # Soft-fail: still let the user fill the form manually.
-        return jsonify(barcode=barcode, source="error", error=hit["_error"],
-                       fields={"label_weight": DEFAULT_LABEL_WEIGHT}, title=None)
-    if not hit:
-        return jsonify(barcode=barcode, source="none",
-                       fields={"label_weight": DEFAULT_LABEL_WEIGHT}, title=None)
-
-    fields = parse_title(hit.get("title", ""), brand_hint=hit.get("brand") or None,
-                         extra_brands=ofd.get_brands())
-    fields.setdefault("label_weight", DEFAULT_LABEL_WEIGHT)
-    return jsonify(barcode=barcode, source="upc", title=hit.get("title", ""), fields=fields)
+    # 3. Not found — fill in manually (and it'll be remembered).
+    src = "amazon" if not barcode.isdigit() else "none"
+    return jsonify(barcode=barcode, source=src,
+                   fields={"label_weight": DEFAULT_LABEL_WEIGHT}, title=None)
 
 
 def _extract_barcode(text: str) -> str | None:

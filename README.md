@@ -13,9 +13,7 @@ It's a small mobile web app:
    2. the **[Open Filament Database](https://openfilamentdatabase.org)** — a
       filament-specific database keyed by spool barcode (GTIN), giving brand,
       material, colour (+ hex), weight and print temps,
-   3. a generic **UPC database** (parses brand/material/colour/weight from the
-      product title — patchy coverage for filament),
-   4. otherwise a blank form, with a **paste-the-title** auto-fill helper.
+   3. otherwise a blank form, with a **paste-the-title** auto-fill helper.
    Or skip the barcode entirely and **📷 photograph the label** — on-device OCR
    reads the text and the same parser fills the form (works even over plain
    HTTP, unlike the live barcode camera).
@@ -135,17 +133,13 @@ Docker-specific env vars: `OFD_CACHE_FILE` and `BARCODE_CACHE_FILE` default to
 |---|---|---|
 | `BAMBUDDY_URL` | `http://localhost:8000` | Your Bambuddy base URL |
 | `BAMBUDDY_API_KEY` | — | Bambuddy API key (**required**, needs *Manage Inventory*) |
-| `UPC_LOOKUP_URL` | UPCItemDB trial | Fallback UPC lookup endpoint |
-| `UPC_API_KEY` | — | Key for a paid UPC provider (optional) |
 | `DEFAULT_LABEL_WEIGHT` | `1000` | Net grams assumed when unknown |
 | `BARCODE_CACHE_FILE` | `barcode_cache.json` | Where learned lookups are stored |
 | `OFD_CACHE_FILE` | `ofd_index.json` | Where the OFD index is cached |
 | `HOST` / `PORT` | `0.0.0.0` / `8088` | Server bind address |
 
 The Open Filament Database dump is downloaded once and cached in
-`ofd_index.json`, refreshed daily. The generic UPC fallback defaults to
-**UPCItemDB's keyless trial** endpoint (rate-limited, ~100 lookups/day); for
-heavier use set `UPC_LOOKUP_URL` + `UPC_API_KEY`.
+`ofd_index.json`, refreshed daily (or on demand via the **Refresh DB** button).
 
 ---
 
@@ -162,7 +156,7 @@ Each created spool is tagged `data_origin = "barcode-scan"`.
 |---|---|
 | `app.py` | Flask backend: serves the page; `/api/lookup`, `/api/parse`, `/api/spool`, `/api/health`; the learning cache; posts to Bambuddy |
 | `ofd.py` | Open Filament Database client — builds the barcode → fields index, cached/refreshed daily |
-| `filament_parse.py` | Heuristics turning a product title into filament fields (UPC fallback + paste-title helper) |
+| `filament_parse.py` | Heuristics turning product/label text into filament fields (paste-title + label OCR) |
 | `templates/index.html` | Mobile UI (barcode scan + manual entry + editable form), Bambuddy dark/green theme |
 | `static/manifest.webmanifest`, `static/sw.js`, `static/icons/` | PWA manifest, service worker, and app icons |
 

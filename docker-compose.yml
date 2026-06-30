@@ -10,7 +10,7 @@ services:
     # Config comes from a .env file beside this compose file (gitignored):
     #   BAMBUDDY_URL=https://your-bambuddy.example.com
     #   BAMBUDDY_API_KEY=bb_xxx
-    #   # optional: DEFAULT_LABEL_WEIGHT, UPC_LOOKUP_URL, UPC_API_KEY
+    #   # optional: DEFAULT_LABEL_WEIGHT
     env_file:
       - .env
     volumes:

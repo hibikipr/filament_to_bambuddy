@@ -51,8 +51,23 @@
   .btn-primary{background:var(--green);color:#0a0a0a;width:100%}
   .btn-primary:disabled{background:#066b2c;color:#5a5a5a}
   .btn-secondary{background:var(--tertiary);color:var(--fg);width:100%}
-  #video{width:100%;border-radius:var(--radius);background:#000;aspect-ratio:4/3;object-fit:cover}
+  #video{width:100%;border-radius:var(--radius);background:#000;aspect-ratio:4/3;object-fit:cover;display:block}
+  #videoWrap{position:relative;border-radius:var(--radius);overflow:hidden}
   .hidden{display:none}
+  /* Scan viewfinder: guide box + corner brackets + sweeping scan line, so
+     it's obvious where to line up the barcode (or QR code). */
+  .viewfinder{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;pointer-events:none}
+  .vf-box{position:relative;width:82%;max-width:320px;height:38%}
+  .vf-box::before{content:'';position:absolute;inset:0;border-radius:8px;box-shadow:0 0 0 9999px rgba(0,0,0,.45)}
+  .vf-corner{position:absolute;width:24px;height:24px;border:3px solid var(--green)}
+  .vf-corner.tl{top:-2px;left:-2px;border-right:none;border-bottom:none;border-top-left-radius:8px}
+  .vf-corner.tr{top:-2px;right:-2px;border-left:none;border-bottom:none;border-top-right-radius:8px}
+  .vf-corner.bl{bottom:-2px;left:-2px;border-right:none;border-top:none;border-bottom-left-radius:8px}
+  .vf-corner.br{bottom:-2px;right:-2px;border-left:none;border-top:none;border-bottom-right-radius:8px}
+  .vf-scanline{position:absolute;left:0;right:0;height:2px;background:var(--green);
+    box-shadow:0 0 6px 2px rgba(0,174,66,.6);animation:vfscan 2s ease-in-out infinite}
+  @keyframes vfscan{0%,100%{top:6%}50%{top:94%}}
+  @media (prefers-reduced-motion: reduce){.vf-scanline{animation:none;top:50%}}
   .badge{display:inline-block;font-size:11px;padding:3px 8px;border-radius:999px;
     background:var(--tertiary);color:var(--muted);margin-left:6px;vertical-align:middle}
   .badge.cache{background:#0c4a2a;color:var(--green-light)}
@@ -64,6 +79,7 @@
   .toast.err{background:var(--danger);color:#fff}
   .swatch{height:44px;border-radius:9px;border:1px solid #4a4a4a;width:100%;padding:0}
   .hint{font-size:12px;color:var(--muted);margin-top:6px}
+  .hint.err{color:var(--danger)}
   .status-dot{width:9px;height:9px;border-radius:50%;display:inline-block;margin-right:6px}
 </style>
 </head>
@@ -91,7 +107,18 @@
   <!-- Scan -->
   <div class="card">
     <button id="startBtn" class="btn-secondary">📷 Scan barcode</button>
-    <video id="video" class="hidden" playsinline></video>
+    <div id="videoWrap" class="hidden">
+      <video id="video" playsinline></video>
+      <div class="viewfinder">
+        <div class="vf-box">
+          <span class="vf-corner tl"></span>
+          <span class="vf-corner tr"></span>
+          <span class="vf-corner bl"></span>
+          <span class="vf-corner br"></span>
+          <div class="vf-scanline"></div>
+        </div>
+      </div>
+    </div>
     <button id="stopBtn" class="btn-secondary hidden" style="margin-top:10px">Stop camera</button>
     <label for="manual" style="margin-top:14px">…or enter the barcode number</label>
     <div class="row">
@@ -304,40 +331,109 @@ $('forgetBtn').onclick = async (e) => {
   }catch(e){ toast('Failed', false); }
 };
 
+// ── Barcode validation (UPC/EAN/GTIN + GS1 Digital Link QR) ──
+// Standard GS1 check-digit lengths for retail barcodes: EAN-8, UPC-A/EAN-12,
+// EAN-13, and GTIN-14. A camera misread (e.g. a false-positive decode from
+// video noise) tends to produce something far shorter — a single digit is
+// the most common symptom — so gating on both length and checksum rejects
+// that before it ever reaches the lookup API.
+function isValidUpcEanBarcode(value){
+  if(!/^\d+$/.test(value)) return false;
+  if(![8,12,13,14].includes(value.length)) return false;
+  const checkDigit = Number(value[value.length-1]);
+  let sum = 0, weight = 3;
+  for(let i=value.length-2;i>=0;i--){ sum += Number(value[i])*weight; weight = weight===3?1:3; }
+  return ((10-(sum%10))%10) === checkDigit;
+}
+// GS1 Digital Link QR codes encode the GTIN as the "01" application
+// identifier in the URL path, e.g. "https://id.gs1.org/01/06938936716785"
+// or with a trailing batch/lot AI. Matches with or without a scheme/host.
+const GS1_DIGITAL_LINK_GTIN_RE = /(?:^|\/)01\/(\d{8,14})(?:\/|$|\?)/;
+// A plain barcode decode is already a bare digit string; a QR decode is
+// typically a GS1 Digital Link URL — pull the GTIN out of either shape.
+// Returns a candidate only — caller still must run isValidUpcEanBarcode.
+function extractGtinFromScan(text){
+  const trimmed = (text||'').trim();
+  if(/^\d+$/.test(trimmed)) return trimmed;
+  const m = trimmed.match(GS1_DIGITAL_LINK_GTIN_RE);
+  return m ? m[1] : null;
+}
+// Like extractGtinFromScan, but for the manual-entry field: also tolerates
+// spaces/dashes typed for readability (e.g. "6938-9367-16785").
+function extractGtinFromManualEntry(text){
+  const trimmed = (text||'').trim();
+  const m = trimmed.match(GS1_DIGITAL_LINK_GTIN_RE);
+  if(m) return m[1];
+  const digitsOnly = trimmed.replace(/[\s-]/g,'');
+  return (digitsOnly && /^\d+$/.test(digitsOnly)) ? digitsOnly : null;
+}
+function setScanHint(msg, isErr){
+  $('scanHint').textContent = msg;
+  $('scanHint').classList.toggle('err', !!isErr);
+}
+
 // ── Scanning ──
 $('startBtn').onclick = async () => {
   if(!window.ZXingBrowser){ toast('Scanner library failed to load', false); return; }
   if(!navigator.mediaDevices || !window.isSecureContext){
-    $('scanHint').textContent='Camera needs https:// (or localhost). Type the barcode below instead.';
+    setScanHint('Camera needs https:// (or localhost). Type the barcode below instead.', true);
     return;
   }
   try{
     reader = new ZXingBrowser.BrowserMultiFormatReader();
-    $('video').classList.remove('hidden'); $('startBtn').classList.add('hidden');
-    $('stopBtn').classList.remove('hidden'); $('scanHint').textContent='Point at the barcode…';
+    // Retail filament spools carry either a linear UPC/EAN barcode or (less
+    // commonly) a GS1 Digital Link QR code encoding the same GTIN in its URL
+    // path. Restricting decode to just these formats (instead of every
+    // symbology ZXing supports) cuts down on false-positive reads from
+    // webcam noise, which is where the single-digit "barcode" misreads were
+    // coming from.
+    if(ZXingBrowser.BarcodeFormat){
+      const F = ZXingBrowser.BarcodeFormat;
+      reader.possibleFormats = [F.UPC_A, F.UPC_E, F.EAN_13, F.EAN_8, F.QR_CODE];
+    }
+    $('videoWrap').classList.remove('hidden'); $('startBtn').classList.add('hidden');
+    $('stopBtn').classList.remove('hidden'); setScanHint('Align the barcode within the frame…');
     await reader.decodeFromVideoDevice(undefined, $('video'), (result, err) => {
-      if(result){ stopScan(); onBarcode(result.getText()); }
+      if(!result) return;
+      const candidate = extractGtinFromScan(result.getText());
+      // Defense-in-depth: even within the restricted formats above, a
+      // corrupted read can still surface a bad check digit, and a QR code
+      // might not be a GS1 Digital Link at all — validate before treating
+      // it as a real barcode. An invalid read is silently ignored so the
+      // scan loop just keeps looking.
+      if(!candidate || !isValidUpcEanBarcode(candidate)) return;
+      stopScan(); onBarcode(candidate);
     });
-  }catch(e){ $('scanHint').textContent='Camera error: '+e; stopScan(); }
+  }catch(e){ setScanHint('Camera error: '+e, true); stopScan(); }
 };
 function stopScan(){
   try{ reader && reader.reset && reader.reset(); }catch(e){}
-  $('video').classList.add('hidden'); $('startBtn').classList.remove('hidden');
+  $('videoWrap').classList.add('hidden'); $('startBtn').classList.remove('hidden');
   $('stopBtn').classList.add('hidden');
 }
 $('stopBtn').onclick = stopScan;
-$('lookupBtn').onclick = () => { const v=$('manual').value.trim(); if(v) onBarcode(v); };
+$('lookupBtn').onclick = () => {
+  const raw = $('manual').value.trim();
+  if(!raw) return;
+  const candidate = extractGtinFromManualEntry(raw);
+  if(!candidate || !isValidUpcEanBarcode(candidate)){
+    setScanHint('Enter a valid UPC-A, EAN-8, or EAN-13 barcode (8, 12, or 13 digits).', true);
+    return;
+  }
+  onBarcode(candidate);
+};
+$('manual').addEventListener('input', () => { if($('scanHint').classList.contains('err')) setScanHint(''); });
 $('manual').addEventListener('keydown', e => { if(e.key==='Enter'){ e.preventDefault(); $('lookupBtn').click(); }});
 
 // ── Lookup → fill form ──
 async function onBarcode(barcode){
   currentBarcode = barcode;
   $('manual').value = barcode;            // echo what was read into the input
-  $('scanHint').textContent='Looking up '+barcode+'…';
+  setScanHint('Looking up '+barcode+'…');
   try{
     const d = await (await fetch('/api/lookup?barcode='+encodeURIComponent(barcode))).json();
     fillForm(d);
-    $('scanHint').textContent='';
+    setScanHint('');
   }catch(e){ toast('Lookup failed', false); }
 }
 

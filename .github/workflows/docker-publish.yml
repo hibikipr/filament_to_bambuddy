@@ -45,6 +45,21 @@ jobs:
             type=semver,pattern={{major}}.{{minor}}
             type=sha,format=short
 
+      # docker/metadata-action's `version` output is NOT always a real
+      # version — for a branch push (e.g. plain `main`, not a `v*` tag) it
+      # falls back to the branch name itself ("main"), which would bake
+      # APP_VERSION=main into the image and show "vmain" in the GUI footer.
+      # Only trust it as a version on an actual tag push; otherwise fall
+      # back to a clearly-labelled dev build identifier.
+      - name: Resolve APP_VERSION build-arg
+        id: version
+        run: |
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            echo "value=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=dev-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
@@ -54,6 +69,6 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
-            VERSION=${{ steps.meta.outputs.version }}
+            VERSION=${{ steps.version.outputs.value }}
           cache-from: type=gha
           cache-to: type=gha,mode=max

@@ -26,6 +26,7 @@ if sys.version_info < (3, 10):
 import json
 import logging
 import os
+import subprocess
 from pathlib import Path
 
 import requests
@@ -57,6 +58,34 @@ ALLOWED_SPOOL_FIELDS = {
     "note", "cost_per_kg", "category", "storage_location", "data_origin",
 }
 
+
+def _get_version() -> str:
+    """Resolve the running app's version for display in the GUI footer.
+
+    Priority: APP_VERSION env var (baked in at Docker build time from the
+    release git tag, see Dockerfile + docker-publish.yml) > local `git
+    describe` (useful when running straight from a git checkout) > "dev".
+    """
+    env_version = os.getenv("APP_VERSION")
+    if env_version:
+        return env_version
+    try:
+        result = subprocess.run(
+            ["git", "describe", "--tags", "--always", "--dirty"],
+            cwd=os.path.dirname(os.path.abspath(__file__)),
+            capture_output=True,
+            text=True,
+            timeout=3,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip()
+    except Exception:
+        pass
+    return "dev"
+
+
+APP_VERSION = _get_version()
+
 app = Flask(__name__)
 
 
@@ -79,7 +108,7 @@ def save_cache(cache: dict):
 
 @app.get("/")
 def index():
-    return render_template("index.html", bambuddy_url=BAMBUDDY_URL)
+    return render_template("index.html", bambuddy_url=BAMBUDDY_URL, version=APP_VERSION)
 
 
 @app.get("/sw.js")

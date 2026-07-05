@@ -298,12 +298,17 @@ async function loadOptions(){
 }
 loadOptions();
 
-// Force-refresh the Open Filament Database.
+// Force-refresh the Open Filament Database + SpoolmanDB-Community.
 $('refreshDb').onclick = async () => {
   $('refreshDb').disabled=true; $('refreshHint').textContent='Refreshing database…';
   try{
     const d = await (await fetch('/api/ofd/refresh',{method:'POST'})).json();
-    if(d.ok){ $('refreshHint').textContent='Updated: '+d.barcodes+' barcodes, '+d.brands+' brands.'; await loadOptions(); }
+    if(d.ok){
+      let msg = 'Updated: '+d.barcodes+' OFD barcodes, '+d.brands+' brands.';
+      if(d.spoolmandb_community_barcodes!=null) msg += ' +'+d.spoolmandb_community_barcodes+' SpoolmanDB-Community barcodes.';
+      $('refreshHint').textContent = msg;
+      await loadOptions();
+    }
     else { $('refreshHint').textContent='Refresh failed'+(d.error?': '+d.error:''); }
   }catch(e){ $('refreshHint').textContent='Refresh failed'; }
   finally{ $('refreshDb').disabled=false; }
@@ -463,6 +468,7 @@ function applyFields(f){
 const BADGE = {
   cache:  ['remembered', 'cache'],
   ofd:    ['Open Filament Database', 'cache'],
+  'spoolmandb-community': ['SpoolmanDB-Community', 'cache'],
   label:  ['read from label photo — check carefully', 'upc'],
   amazon: ['Amazon code — enter below (I\'ll remember it)', ''],
   none:   ['not in database — enter below (I\'ll remember it)', ''],

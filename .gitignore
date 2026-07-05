@@ -11,6 +11,9 @@ barcode_cache.json
 # Open Filament Database index (downloaded + rebuilt daily)
 ofd_index.json
 
+# SpoolmanDB-Community index (downloaded + rebuilt daily)
+spoolmandb_community_index.json
+
 # Local run script / env with secrets — never commit
 run.sh
 .env

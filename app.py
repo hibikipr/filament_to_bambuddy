@@ -135,11 +135,27 @@ def _bambuddy_locations() -> list[str]:
 def options():
     """Dropdown data for the form (materials, subtypes, weights, colours, brands, locations)."""
     import ofd
+    import spoolmandb_community
     try:
-        brands = sorted(set(DEFAULT_BRANDS) | set(ofd.get_brands()), key=str.lower)
+        brands = sorted(
+            set(DEFAULT_BRANDS) | set(ofd.get_brands()) | set(spoolmandb_community.get_brands()),
+            key=str.lower,
+        )
     except Exception:
         brands = DEFAULT_BRANDS
-    return jsonify(materials=MATERIAL_OPTIONS, subtypes=SUBTYPE_OPTIONS,
+    try:
+        materials = sorted(
+            set(MATERIAL_OPTIONS) | {m["material"] for m in spoolmandb_community.get_materials() if m.get("material")},
+            key=str.lower,
+        )
+    except Exception:
+        materials = MATERIAL_OPTIONS
+    # Note: SpoolmanDB-Community color names are deliberately NOT merged into
+    # COLOR_OPTIONS — that list is a short generic color-family dropdown
+    # (~23 entries), while SpoolmanDB's colors are thousands of specific
+    # product names on a different axis (already covered by the free-text
+    # color_name field, not a constrained dropdown).
+    return jsonify(materials=materials, subtypes=SUBTYPE_OPTIONS,
                    weights=WEIGHT_OPTIONS, colors=COLOR_OPTIONS, brands=brands,
                    locations=_bambuddy_locations())
 
@@ -167,17 +183,32 @@ def forget_barcode(barcode):
 
 @app.post("/api/ofd/refresh")
 def ofd_refresh():
-    """Force a re-download/rebuild of the Open Filament Database index."""
+    """Force a re-download/rebuild of the OFD + SpoolmanDB-Community indexes.
+
+    Kept at this URL (not renamed) so the existing "Refresh DB" button in
+    templates/index.html doesn't need a second endpoint/button — one refresh
+    action updates both community databases.
+    """
     import ofd
-    log.info("OFD refresh started")
+    import spoolmandb_community
+    log.info("OFD + SpoolmanDB-Community refresh started")
     try:
         idx = ofd.get_index(force=True)
         brands = len(ofd.get_brands())
         log.info("OFD refresh done: %d barcodes, %d brands", len(idx), brands)
-        return jsonify(ok=True, barcodes=len(idx), brands=brands)
     except Exception as e:
         log.error("OFD refresh failed: %s", e)
         return jsonify(ok=False, error=str(e)), 502
+
+    try:
+        smdb_idx = spoolmandb_community.get_index(force=True)
+        smdb_barcodes = len(smdb_idx)
+        log.info("SpoolmanDB-Community refresh done: %d barcodes", smdb_barcodes)
+    except Exception as e:
+        log.error("SpoolmanDB-Community refresh failed: %s", e)
+        smdb_barcodes = 0
+
+    return jsonify(ok=True, barcodes=len(idx), brands=brands, spoolmandb_community_barcodes=smdb_barcodes)
 
 
 @app.get("/api/health")
@@ -218,7 +249,7 @@ def health():
 
 @app.get("/api/lookup")
 def lookup():
-    """Resolve a barcode to filament fields: cache first, then the Open Filament Database."""
+    """Resolve a barcode to filament fields: cache first, then OFD, then SpoolmanDB-Community."""
     barcode = (request.args.get("barcode") or "").strip()
     if not barcode:
         return jsonify(error="barcode required"), 400
@@ -239,7 +270,18 @@ def lookup():
         return jsonify(barcode=barcode, source="ofd",
                        title=ofd_fields.get("_title"), fields=fields)
 
-    # 3. Not found — fill in manually (and it'll be remembered).
+    # 3. SpoolmanDB-Community — broader brand coverage than OFD, but far
+    # sparser barcode coverage, so it's a secondary fallback, not a replacement.
+    import spoolmandb_community
+    smdb_fields = spoolmandb_community.lookup(barcode)
+    if smdb_fields:
+        fields = {k: v for k, v in smdb_fields.items() if not k.startswith("_")}
+        fields.setdefault("label_weight", DEFAULT_LABEL_WEIGHT)
+        log.info("lookup %s: SpoolmanDB-Community hit — %s", barcode, smdb_fields.get("_title", ""))
+        return jsonify(barcode=barcode, source="spoolmandb-community",
+                       title=smdb_fields.get("_title"), fields=fields)
+
+    # 4. Not found — fill in manually (and it'll be remembered).
     src = "amazon" if not barcode.isdigit() else "none"
     log.info("lookup %s: not found (source=%s)", barcode, src)
     return jsonify(barcode=barcode, source=src,
@@ -265,12 +307,13 @@ def _extract_barcode(text: str) -> str | None:
 def parse_endpoint():
     """Parse free text (pasted title or label OCR) into filament fields.
 
-    Heuristically parses the text, and if a barcode is present in it, looks that
-    barcode up in the Open Filament Database — authoritative OFD data overrides
-    the guesses when found.
+    Heuristically parses the text, and if a barcode is present in it, looks
+    that barcode up (OFD, then SpoolmanDB-Community) — authoritative data
+    overrides the guesses when found.
     """
     from filament_parse import parse_title
     import ofd
+    import spoolmandb_community
     title = (request.args.get("title") or "").strip()
     if not title:
         return jsonify(fields={})
@@ -288,6 +331,12 @@ def parse_endpoint():
             fields = {**fields, **{k: v for k, v in ofd_fields.items() if not k.startswith("_")}}
             source = "ofd"
             out_title = ofd_fields.get("_title") or title
+        else:
+            smdb_fields = spoolmandb_community.lookup(barcode)
+            if smdb_fields:
+                fields = {**fields, **{k: v for k, v in smdb_fields.items() if not k.startswith("_")}}
+                source = "spoolmandb-community"
+                out_title = smdb_fields.get("_title") or title
 
     fields.setdefault("label_weight", DEFAULT_LABEL_WEIGHT)
     return jsonify(fields=fields, title=out_title, barcode=barcode, source=source)

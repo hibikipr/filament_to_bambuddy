@@ -233,20 +233,44 @@ def _build_index(variants: list) -> tuple:
     return gtin_index, sku_index
 
 
-def _load_cached():
+def _read_cache_file() -> dict | None:
+    """Parse the cache file and check its version/shape, ignoring TTL. Returns
+    the raw dict, or None if missing/corrupt/wrong-version — those are the
+    only conditions that make a cache file truly unusable; staleness alone
+    does not."""
     if not SPOOLMANDB_COMMUNITY_CACHE.exists():
         return None
     try:
         data = json.loads(SPOOLMANDB_COMMUNITY_CACHE.read_text())
         if data.get("cache_version") != _CACHE_VERSION:
             return None
-        if time.time() - data.get("built_at", 0) > SPOOLMANDB_COMMUNITY_TTL_SECONDS:
-            return None
         if "variants" not in data:
             return None
-        return data.get("gtin_index", {}), data.get("sku_index", {}), data.get("brands", []), data.get("variants", [])
+        return data
     except Exception:
         return None
+
+
+def _cache_tuple(data: dict) -> tuple:
+    return data.get("gtin_index", {}), data.get("sku_index", {}), data.get("brands", []), data.get("variants", [])
+
+
+def _load_cached():
+    """Return the cache contents if present and fresh (within TTL), else None."""
+    data = _read_cache_file()
+    if data is None:
+        return None
+    if time.time() - data.get("built_at", 0) > SPOOLMANDB_COMMUNITY_TTL_SECONDS:
+        return None
+    return _cache_tuple(data)
+
+
+def _load_stale_cached():
+    """Return the cache contents regardless of TTL — a last-resort fallback
+    for when a refresh attempt fails (e.g. offline), so a working-but-old
+    index is still served instead of dropping to "no match" for everything."""
+    data = _read_cache_file()
+    return None if data is None else _cache_tuple(data)
 
 
 def _refresh() -> tuple:
@@ -255,7 +279,12 @@ def _refresh() -> tuple:
     gtin_index, sku_index = _build_index(variants)
     brands = sorted({v["manufacturer"] for v in variants if v.get("manufacturer")})
     try:
-        SPOOLMANDB_COMMUNITY_CACHE.write_text(
+        # Write to a temp file and rename over the real path — Path.replace()
+        # is atomic (POSIX rename(2) semantics, and Windows-safe since it
+        # replaces an existing destination too), so a reader never observes a
+        # half-written cache file even if the process is killed mid-write.
+        tmp_path = SPOOLMANDB_COMMUNITY_CACHE.with_suffix(SPOOLMANDB_COMMUNITY_CACHE.suffix + ".tmp")
+        tmp_path.write_text(
             json.dumps(
                 {
                     "cache_version": _CACHE_VERSION,
@@ -267,6 +296,7 @@ def _refresh() -> tuple:
                 }
             )
         )
+        tmp_path.replace(SPOOLMANDB_COMMUNITY_CACHE)
     except Exception:
         pass
     return gtin_index, sku_index, brands, variants
@@ -278,7 +308,17 @@ def _ensure_loaded(force: bool = False):
         return
     loaded = None if force else _load_cached()
     if loaded is None:
-        loaded = _refresh()
+        try:
+            loaded = _refresh()
+        except Exception:
+            # Offline/upstream-down: a stale-but-working index beats no index
+            # at all. Only re-raise if there's truly nothing on disk to fall
+            # back to (e.g. first-ever startup with no network) — that's the
+            # one case where the caller must know the lookup couldn't be
+            # attempted at all.
+            loaded = _load_stale_cached()
+            if loaded is None:
+                raise
     _GTIN_INDEX, _SKU_INDEX, _BRANDS, _VARIANTS = loaded
     _INDEX_LOADED_AT = time.time()
 

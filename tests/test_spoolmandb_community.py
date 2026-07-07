@@ -268,6 +268,41 @@ class TestCachingAndLookup:
             mock_refresh.assert_called_once()
         assert smdb._canon("6975337031345") in result
 
+    def test_refresh_failure_falls_back_to_stale_disk_cache(self, tmp_path):
+        """Offline/upstream-down must not discard an otherwise-usable, if old,
+        index — a stale hit beats reporting no match for every barcode."""
+        stale_time = time.time() - smdb.SPOOLMANDB_COMMUNITY_TTL_SECONDS - 10
+        variants = smdb._parse_manufacturer_file("Bambu Lab", SAMPLE_MANUFACTURER_FILE)
+        gtin_index, sku_index = smdb._build_index(variants)
+        self._write_cache(tmp_path, gtin_index, sku_index, ["Bambu Lab"], variants, built_at=stale_time)
+
+        with patch("spoolmandb_community._refresh", side_effect=RuntimeError("offline")):
+            result = smdb.get_gtin_index()
+        assert smdb._canon("6975337031345") in result
+
+    def test_refresh_failure_with_no_cache_at_all_raises(self, tmp_path):
+        """No stale fallback exists (first-ever startup, no network) — the
+        caller must still learn the lookup couldn't be attempted."""
+        with (
+            patch("spoolmandb_community._refresh", side_effect=RuntimeError("offline")),
+            pytest.raises(RuntimeError),
+        ):
+            smdb.get_gtin_index()
+
+    def test_refresh_writes_cache_atomically(self, tmp_path):
+        """Cache writes go through a temp file + rename, never a partial file
+        at the real path — even if a write is interrupted mid-way."""
+        cache_path = tmp_path / "spoolmandb_community_index.json"
+        variants = smdb._parse_manufacturer_file("Bambu Lab", SAMPLE_MANUFACTURER_FILE)
+
+        with patch("spoolmandb_community._download_and_parse_variants", return_value=variants):
+            smdb._refresh()
+
+        assert cache_path.exists()
+        assert not cache_path.with_suffix(".json.tmp").exists()
+        data = json.loads(cache_path.read_text())
+        assert data["cache_version"] == smdb._CACHE_VERSION
+
     def test_lookup_returns_none_for_unknown_barcode(self, tmp_path):
         variants = smdb._parse_manufacturer_file("Bambu Lab", SAMPLE_MANUFACTURER_FILE)
         gtin_index, sku_index = smdb._build_index(variants)

@@ -14,7 +14,7 @@ implementations can be sanity-checked against the same expected outputs.
 
 import json
 import time
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -211,6 +211,39 @@ class TestCachingAndLookup:
             result = ofd.get_gtin_index()
             mock_refresh.assert_called_once()
         assert ofd._canon("06938936716785") in result
+
+    def test_refresh_failure_falls_back_to_stale_disk_cache(self, tmp_path):
+        """Offline/upstream-down must not discard an otherwise-usable, if old,
+        index — a stale hit beats reporting no match for every barcode."""
+        stale_time = time.time() - ofd.OFD_TTL_SECONDS - 10
+        gtin_index, article_index, variant_codes = ofd._build_index(SAMPLE_ALL_JSON)
+        self._write_cache(tmp_path, gtin_index, article_index, variant_codes, ["Sunlu"], built_at=stale_time)
+
+        with patch("ofd._refresh", side_effect=RuntimeError("offline")):
+            result = ofd.get_gtin_index()
+        assert ofd._canon("06938936716785") in result
+
+    def test_refresh_failure_with_no_cache_at_all_raises(self, tmp_path):
+        """No stale fallback exists (first-ever startup, no network) — the
+        caller must still learn the lookup couldn't be attempted."""
+        with patch("ofd._refresh", side_effect=RuntimeError("offline")), pytest.raises(RuntimeError):
+            ofd.get_gtin_index()
+
+    def test_refresh_writes_cache_atomically(self, tmp_path):
+        """Cache writes go through a temp file + rename, never a partial file
+        at the real path — even if a write is interrupted mid-way."""
+        cache_path = tmp_path / "ofd_cache.json"
+        mock_response = MagicMock()
+        mock_response.raise_for_status = MagicMock()
+        mock_response.json = MagicMock(return_value=SAMPLE_ALL_JSON)
+
+        with patch("ofd.requests.get", return_value=mock_response):
+            ofd._refresh()
+
+        assert cache_path.exists()
+        assert not cache_path.with_suffix(".json.tmp").exists()
+        data = json.loads(cache_path.read_text())
+        assert data["cache_version"] == ofd._CACHE_VERSION
 
     def test_lookup_returns_none_for_unknown_barcode(self, tmp_path):
         gtin_index, article_index, variant_codes = ofd._build_index(SAMPLE_ALL_JSON)

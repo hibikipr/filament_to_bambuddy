@@ -7,22 +7,28 @@ your [Bambuddy](https://github.com/) filament inventory.
 
 It's a small mobile web app:
 
-1. **Scan** the box's barcode (phone camera) — or type the number.
+1. **Scan** the box's barcode (UPC/EAN, or a Code 128 manufacturer SKU/article
+   number for boxes with no retail barcode at all) — or type the number.
 2. **Look up** the product, in order:
-   1. your **per-barcode cache** (anything you've confirmed before),
-   2. the **[Open Filament Database](https://openfilamentdatabase.org)** — a
-      filament-specific database keyed by spool barcode (GTIN), giving brand,
-      material, colour (+ hex), weight and print temps,
+   1. your **per-code cache** (anything you've confirmed before),
+   2. the **[Open Filament Database](https://openfilamentdatabase.org)** and
+      **[SpoolmanDB-Community](https://github.com/Icezaza2543/SpoolmanDB-Community)** —
+      cross-referenced against each other so a hit in one fills in fields the
+      other is missing (e.g. print temps from one, colour from the other),
    3. otherwise a blank form, with a **paste-the-title** auto-fill helper.
    Or skip the barcode entirely and **📷 photograph the label** — on-device OCR
    reads the text and the same parser fills the form (works even over plain
    HTTP, unlike the live barcode camera).
-3. **Review** the auto-filled details (correct anything).
+3. **Review** the auto-filled details (correct anything). Any other codes
+   discovered for the same product (other package-size barcodes, the refill
+   barcode, the manufacturer SKU) are shown as "Also matches" — informational
+   only.
 4. **Add** the spool(s) to Bambuddy via its inventory API.
 
-The lookup also **learns**: whatever you confirm is remembered for that barcode,
-so the same product auto-fills instantly next time. *(Scope: new, unopened
-spools still in the box.)*
+The lookup also **learns**: whatever you confirm is remembered for that code
+*and* every code cross-referenced alongside it, so a later scan of any of
+them — the same barcode, a sibling package size, or the manufacturer SKU —
+auto-fills instantly next time. *(Scope: new, unopened spools still in the box.)*
 
 > **Tested with** Bambuddy v0.2.4.8. Requires **Python 3.10+**.
 
@@ -136,6 +142,7 @@ Docker-specific env vars: `OFD_CACHE_FILE` and `BARCODE_CACHE_FILE` default to
 | `DEFAULT_LABEL_WEIGHT` | `1000` | Net grams assumed when unknown |
 | `BARCODE_CACHE_FILE` | `barcode_cache.json` | Where learned lookups are stored |
 | `OFD_CACHE_FILE` | `ofd_index.json` | Where the OFD index is cached |
+| `SPOOLMANDB_COMMUNITY_CACHE_FILE` | `spoolmandb_community_index.json` | Where the SpoolmanDB-Community index is cached |
 | `HOST` / `PORT` | `0.0.0.0` / `8088` | Server bind address |
 
 The Open Filament Database dump is downloaded once and cached in
@@ -155,7 +162,8 @@ Each created spool is tagged `data_origin = "barcode-scan"`.
 | File | Purpose |
 |---|---|
 | `app.py` | Flask backend: serves the page; `/api/lookup`, `/api/parse`, `/api/spool`, `/api/health`; the learning cache; posts to Bambuddy |
-| `ofd.py` | Open Filament Database client — builds the barcode → fields index, cached/refreshed daily |
+| `ofd.py` | Open Filament Database client — builds the GTIN + article-number (SKU) indexes, cached/refreshed daily |
+| `spoolmandb_community.py` | SpoolmanDB-Community client — builds the GTIN + SKU indexes from the community filament repo, cached/refreshed daily |
 | `filament_parse.py` | Heuristics turning product/label text into filament fields (paste-title + label OCR) |
 | `templates/index.html` | Mobile UI (barcode scan + manual entry + editable form), Bambuddy dark/green theme |
 | `static/manifest.webmanifest`, `static/sw.js`, `static/icons/` | PWA manifest, service worker, and app icons |

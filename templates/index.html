@@ -120,9 +120,9 @@
       </div>
     </div>
     <button id="stopBtn" class="btn-secondary hidden" style="margin-top:10px">Stop camera</button>
-    <label for="manual" style="margin-top:14px">…or enter the barcode number</label>
+    <label for="manual" style="margin-top:14px">…or enter the barcode/SKU number</label>
     <div class="row">
-      <div><input id="manual" inputmode="numeric" placeholder="e.g. 6940082300018"></div>
+      <div><input id="manual" placeholder="e.g. 6940082300018"></div>
       <div style="flex:0 0 96px"><button id="lookupBtn" class="btn-secondary">Look up</button></div>
     </div>
     <div id="scanHint" class="hint"></div>
@@ -140,7 +140,8 @@
       <a id="forgetBtn" href="#" class="hidden" style="float:right;font-size:12px;color:var(--muted)">🗑 Forget</a>
     </div>
     <div id="barcodeLine" class="muted" style="margin-bottom:2px"></div>
-    <div id="titleLine" class="muted" style="margin-bottom:8px"></div>
+    <div id="titleLine" class="muted" style="margin-bottom:2px"></div>
+    <div id="linkedCodesLine" class="muted" style="margin-bottom:8px;font-size:12px"></div>
 
     <label>Paste product title to auto-fill (optional)</label>
     <div class="row">
@@ -376,6 +377,18 @@ function extractGtinFromManualEntry(text){
   const digitsOnly = trimmed.replace(/[\s-]/g,'');
   return (digitsOnly && /^\d+$/.test(digitsOnly)) ? digitsOnly : null;
 }
+// Light sanity check for a manufacturer SKU/article number — e.g. a decoded
+// Code 128 "inventory barcode" (no UPC/EAN counterpart, like some Polymaker
+// boxes ship with) or a manually-typed SKU. Unlike a GTIN, a SKU has no
+// universal checksum to validate against, so this only guards against
+// obviously-wrong input (empty, or absurdly long/short) — Code 128's own
+// symbology-level checksum and start/stop pattern already make a successful
+// camera decode trustworthy; the backend's OFD/SpoolmanDB-Community lookups
+// are the real arbiter of whether it resolves to anything.
+function isPlausibleSku(value){
+  const trimmed = (value||'').trim();
+  return trimmed.length >= 3 && trimmed.length <= 32;
+}
 function setScanHint(msg, isErr){
   $('scanHint').textContent = msg;
   $('scanHint').classList.toggle('err', !!isErr);
@@ -390,20 +403,33 @@ $('startBtn').onclick = async () => {
   }
   try{
     reader = new ZXingBrowser.BrowserMultiFormatReader();
-    // Retail filament spools carry either a linear UPC/EAN barcode or (less
-    // commonly) a GS1 Digital Link QR code encoding the same GTIN in its URL
-    // path. Restricting decode to just these formats (instead of every
+    // Retail filament spools carry a linear UPC/EAN barcode, a GS1 Digital
+    // Link QR code encoding the same GTIN in its URL path, or — for some
+    // manufacturers (e.g. a Polymaker box with no UPC/EAN at all) — a Code
+    // 128 "inventory barcode" encoding a SKU/article number instead of a
+    // GTIN. Restricting decode to just these formats (instead of every
     // symbology ZXing supports) cuts down on false-positive reads from
     // webcam noise, which is where the single-digit "barcode" misreads were
     // coming from.
     if(ZXingBrowser.BarcodeFormat){
       const F = ZXingBrowser.BarcodeFormat;
-      reader.possibleFormats = [F.UPC_A, F.UPC_E, F.EAN_13, F.EAN_8, F.QR_CODE];
+      reader.possibleFormats = [F.UPC_A, F.UPC_E, F.EAN_13, F.EAN_8, F.QR_CODE, F.CODE_128];
     }
     $('videoWrap').classList.remove('hidden'); $('startBtn').classList.add('hidden');
     $('stopBtn').classList.remove('hidden'); setScanHint('Align the barcode within the frame…');
     await reader.decodeFromVideoDevice(undefined, $('video'), (result, err) => {
       if(!result) return;
+      if(ZXingBrowser.BarcodeFormat && result.getBarcodeFormat() === ZXingBrowser.BarcodeFormat.CODE_128){
+        // Code 128 has its own symbology-level checksum and start/stop
+        // pattern, so a successful decode is already trustworthy — unlike a
+        // bare guessed digit string, it doesn't need a GTIN-style checksum
+        // (it's typically not even a GTIN, but a manufacturer SKU/article
+        // number). Only a light sanity check is applied.
+        const text = (result.getText()||'').trim();
+        if(!isPlausibleSku(text)) return;
+        stopScan(); onBarcode(text);
+        return;
+      }
       const candidate = extractGtinFromScan(result.getText());
       // Defense-in-depth: even within the restricted formats above, a
       // corrupted read can still surface a bad check digit, and a QR code
@@ -425,11 +451,19 @@ $('lookupBtn').onclick = () => {
   const raw = $('manual').value.trim();
   if(!raw) return;
   const candidate = extractGtinFromManualEntry(raw);
-  if(!candidate || !isValidUpcEanBarcode(candidate)){
-    setScanHint('Enter a valid UPC-A, EAN-8, or EAN-13 barcode (8, 12, or 13 digits).', true);
+  if(candidate && isValidUpcEanBarcode(candidate)){
+    onBarcode(candidate);
     return;
   }
-  onBarcode(candidate);
+  // Not a valid GTIN shape — fall back to treating the raw input as a
+  // manufacturer SKU/article number (e.g. a Polymaker inventory barcode
+  // typed by hand instead of scanned) rather than hard-rejecting it. The
+  // backend's OFD/SpoolmanDB-Community lookups decide if it resolves.
+  if(isPlausibleSku(raw)){
+    onBarcode(raw.toUpperCase());
+    return;
+  }
+  setScanHint('Enter a valid UPC-A/EAN-8/EAN-13 barcode, or a manufacturer SKU/article number (3+ characters).', true);
 };
 $('manual').addEventListener('input', () => { if($('scanHint').classList.contains('err')) setScanHint(''); });
 $('manual').addEventListener('keydown', e => { if(e.key==='Enter'){ e.preventDefault(); $('lookupBtn').click(); }});
@@ -487,6 +521,12 @@ function fillForm(d){
   $('barcodeLine').innerHTML = d.barcode
     ? 'Barcode: <span style="color:var(--fg);font-family:Menlo,monospace">'+d.barcode+'</span>' : '';
   $('titleLine').textContent = d.title || '';
+  // Sibling GTIN/SKU codes cross-referenced from OFD/SpoolmanDB-Community
+  // (see _external_all_codes in app.py) — read-only, informational only.
+  const linked = d.linked_codes || [];
+  $('linkedCodesLine').textContent = linked.length
+    ? 'Also matches: '+linked.map(c=>c.is_refill ? c.code+' (refill)' : c.code).join(', ')
+    : '';
   // Point the web-search link at the scanned code (helps when no DB has it).
   const code = d.barcode || currentBarcode || '';
   $('searchLink').href = 'https://www.google.com/search?q='+encodeURIComponent('"'+code+'" filament');
@@ -561,9 +601,11 @@ $('labelPhoto').onchange = async (e) => {
     const fields = Object.assign({label_weight:1000}, d.fields||{});
     // Did OCR yield anything beyond the default weight?
     const got = !!d.barcode || Object.keys(fields).some(k => k!=='label_weight');
-    fillForm({ source: d.source==='ofd' ? 'ofd' : (got ? 'label' : 'none'),
+    const dbSource = d.source==='ofd' || d.source==='spoolmandb-community';
+    fillForm({ source: dbSource ? d.source : (got ? 'label' : 'none'),
                barcode: d.barcode || currentBarcode,
-               title: d.source==='ofd' ? (d.title||'') : '',  // never dump raw OCR text
+               title: dbSource ? (d.title||'') : '',  // never dump raw OCR text
+               linked_codes: dbSource ? (d.linked_codes||[]) : [],
                fields });
     $('ocrHint').textContent = got ? ''
       : 'Couldn\'t read the label clearly. Try a closer, flatter, well-lit photo of the spec text — or fill in the details below.';
@@ -581,6 +623,10 @@ $('autofillBtn').onclick = async () => {
     if(d.barcode){
       currentBarcode = d.barcode;
       $('barcodeLine').innerHTML = 'Barcode: <span style="color:var(--fg);font-family:Menlo,monospace">'+d.barcode+'</span>';
+      const linked = d.linked_codes || [];
+      $('linkedCodesLine').textContent = linked.length
+        ? 'Also matches: '+linked.map(c=>c.is_refill ? c.code+' (refill)' : c.code).join(', ')
+        : '';
     }
     if(!Object.keys(d.fields||{}).length) toast('Couldn\'t parse that title', false);
   }catch(e){ toast('Parse failed', false); }

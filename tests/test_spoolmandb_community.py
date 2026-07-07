@@ -3,9 +3,12 @@
 Tests:
 - _canon() barcode canonicalization (shared algorithm, duplicated from ofd.py)
 - _subtype_from_template() literal {color_name} placeholder removal
-- _parse_manufacturer_file() / _build_index() expand raw source files into a
-  barcode index correctly (eans + eans_refill, multi-color hexes, temp ranges)
-- get_index()/lookup() disk-cache TTL behavior (fresh cache used, stale triggers refresh)
+- _parse_manufacturer_file() / _build_index() expand raw source files into
+  GTIN + SKU indexes correctly (eans + eans_refill + codes, multi-color
+  hexes, temp ranges, all_codes grouping)
+- get_gtin_index()/get_sku_index()/lookup()/lookup_sku() disk-cache TTL
+  behavior (fresh cache used, stale triggers refresh, old cache-version
+  shape triggers refresh)
 
 Mirrors bambuddy's backend/tests/unit/test_spoolmandb_community_client.py test
 data so the two implementations can be sanity-checked against the same
@@ -69,7 +72,7 @@ SAMPLE_MANUFACTURER_FILE = {
             "diameters": [1.75],
             "extruder_temp_range": [220, 240],
             "colors": [
-                {"name": "Ivory White", "hex": "FFFFFF", "eans": ["6975337031345"]},
+                {"name": "Ivory White", "hex": "FFFFFF", "eans": ["6975337031345"], "codes": ["CA19001"]},
                 {"name": "Desert Tan", "hex": "C19A6B", "eans_refill": ["6975337035053"]},
                 {"name": "No Barcode Blue", "hex": "0000FF"},
             ],
@@ -109,12 +112,14 @@ class TestParseManufacturerFile:
         assert v["nozzle_temp_min"] == 220
         assert v["nozzle_temp_max"] == 240
         assert v["eans"] == ["6975337031345"]
+        assert v["codes"] == ["CA19001"]
 
     def test_eans_refill_present(self):
         variants = smdb._parse_manufacturer_file("Bambu Lab", SAMPLE_MANUFACTURER_FILE)
         v = next(v for v in variants if v["color_name"] == "Desert Tan")
         assert v["eans_refill"] == ["6975337035053"]
         assert v["eans"] == []
+        assert v["codes"] == []
 
     def test_color_without_barcode_still_expanded(self):
         variants = smdb._parse_manufacturer_file("Bambu Lab", SAMPLE_MANUFACTURER_FILE)
@@ -129,19 +134,54 @@ class TestParseManufacturerFile:
         assert v["rgba"] == "000000FF"
 
 
+class TestAllCodesFor:
+    def test_gathers_gtin_refill_and_sku(self):
+        variants = smdb._parse_manufacturer_file("Bambu Lab", SAMPLE_MANUFACTURER_FILE)
+        v = next(v for v in variants if v["color_name"] == "Ivory White")
+        codes = smdb._all_codes_for(v)
+        assert {"code": "6975337031345", "kind": "gtin", "is_refill": False} in codes
+        assert {"code": "CA19001", "kind": "sku", "is_refill": False} in codes
+
+    def test_refill_flagged(self):
+        variants = smdb._parse_manufacturer_file("Bambu Lab", SAMPLE_MANUFACTURER_FILE)
+        v = next(v for v in variants if v["color_name"] == "Desert Tan")
+        codes = smdb._all_codes_for(v)
+        assert codes == [{"code": "6975337035053", "kind": "gtin", "is_refill": True}]
+
+    def test_no_codes_returns_empty(self):
+        variants = smdb._parse_manufacturer_file("Bambu Lab", SAMPLE_MANUFACTURER_FILE)
+        v = next(v for v in variants if v["color_name"] == "No Barcode Blue")
+        assert smdb._all_codes_for(v) == []
+
+
 class TestBuildIndex:
     def test_indexes_eans_and_eans_refill(self):
         variants = smdb._parse_manufacturer_file("Bambu Lab", SAMPLE_MANUFACTURER_FILE)
-        index = smdb._build_index(variants)
-        assert smdb._canon("6975337031345") in index
-        assert smdb._canon("6975337035053") in index
-        assert smdb._canon("1234567890128") in index
-        assert len(index) == 3
+        gtin_index, sku_index = smdb._build_index(variants)
+        assert smdb._canon("6975337031345") in gtin_index
+        assert smdb._canon("6975337035053") in gtin_index
+        assert smdb._canon("1234567890128") in gtin_index
+        assert len(gtin_index) == 3
+
+    def test_indexes_codes_as_sku(self):
+        variants = smdb._parse_manufacturer_file("Bambu Lab", SAMPLE_MANUFACTURER_FILE)
+        gtin_index, sku_index = smdb._build_index(variants)
+        assert "CA19001" in sku_index
+        assert sku_index["CA19001"]["fields"]["color_name"] == "Ivory White"
+
+    def test_gtin_and_sku_share_entry_for_cross_referencing(self):
+        """A GTIN hit and a SKU hit on the same variant must share the same
+        all_codes bundle, so resolving either recovers the other."""
+        variants = smdb._parse_manufacturer_file("Bambu Lab", SAMPLE_MANUFACTURER_FILE)
+        gtin_index, sku_index = smdb._build_index(variants)
+        gtin_entry = gtin_index[smdb._canon("6975337031345")]
+        sku_entry = sku_index["CA19001"]
+        assert gtin_entry is sku_entry
 
     def test_indexed_fields_match_barcode_field_keys(self):
         variants = smdb._parse_manufacturer_file("Bambu Lab", SAMPLE_MANUFACTURER_FILE)
-        index = smdb._build_index(variants)
-        fields = index[smdb._canon("6975337031345")]
+        gtin_index, _ = smdb._build_index(variants)
+        fields = gtin_index[smdb._canon("6975337031345")]["fields"]
         assert set(fields.keys()) == set(smdb._BARCODE_FIELD_KEYS)
         assert fields["brand"] == "Bambu Lab"
         assert fields["color_name"] == "Ivory White"
@@ -151,65 +191,113 @@ class TestBuildIndex:
 class TestCachingAndLookup:
     @pytest.fixture(autouse=True)
     def _reset_module_cache(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(smdb, "_INDEX", None)
+        monkeypatch.setattr(smdb, "_GTIN_INDEX", None)
+        monkeypatch.setattr(smdb, "_SKU_INDEX", None)
         monkeypatch.setattr(smdb, "_BRANDS", None)
         monkeypatch.setattr(smdb, "_VARIANTS", None)
         monkeypatch.setattr(smdb, "_INDEX_LOADED_AT", 0.0)
         monkeypatch.setattr(smdb, "SPOOLMANDB_COMMUNITY_CACHE", tmp_path / "spoolmandb_community_index.json")
         yield
 
-    def test_fresh_disk_cache_used_without_network_call(self, tmp_path):
+    def _write_cache(self, tmp_path, gtin_index, sku_index, brands, variants, built_at=None, version=None):
         cache_file = tmp_path / "spoolmandb_community_index.json"
-        variants = smdb._parse_manufacturer_file("Bambu Lab", SAMPLE_MANUFACTURER_FILE)
-        index = smdb._build_index(variants)
         cache_file.write_text(
-            json.dumps({"built_at": time.time(), "index": index, "brands": ["Bambu Lab"], "variants": variants})
+            json.dumps(
+                {
+                    "cache_version": smdb._CACHE_VERSION if version is None else version,
+                    "built_at": time.time() if built_at is None else built_at,
+                    "gtin_index": gtin_index,
+                    "sku_index": sku_index,
+                    "brands": brands,
+                    "variants": variants,
+                }
+            )
         )
 
+    def test_fresh_disk_cache_used_without_network_call(self, tmp_path):
+        variants = smdb._parse_manufacturer_file("Bambu Lab", SAMPLE_MANUFACTURER_FILE)
+        gtin_index, sku_index = smdb._build_index(variants)
+        self._write_cache(tmp_path, gtin_index, sku_index, ["Bambu Lab"], variants)
+
         with patch("spoolmandb_community._refresh") as mock_refresh:
-            result = smdb.get_index()
+            result = smdb.get_gtin_index()
             mock_refresh.assert_not_called()
         assert smdb._canon("6975337031345") in result
 
     def test_stale_disk_cache_triggers_refresh(self, tmp_path):
-        cache_file = tmp_path / "spoolmandb_community_index.json"
         stale_time = time.time() - smdb.SPOOLMANDB_COMMUNITY_TTL_SECONDS - 10
-        cache_file.write_text(json.dumps({"built_at": stale_time, "index": {}, "brands": [], "variants": []}))
+        self._write_cache(tmp_path, {}, {}, [], [], built_at=stale_time)
 
         variants = smdb._parse_manufacturer_file("Bambu Lab", SAMPLE_MANUFACTURER_FILE)
-        fresh_index = smdb._build_index(variants)
-        with patch("spoolmandb_community._refresh", return_value=(fresh_index, ["Bambu Lab"], variants)) as mock_refresh:
-            result = smdb.get_index()
+        gtin_index, sku_index = smdb._build_index(variants)
+        with patch(
+            "spoolmandb_community._refresh",
+            return_value=(gtin_index, sku_index, ["Bambu Lab"], variants),
+        ) as mock_refresh:
+            result = smdb.get_gtin_index()
+            mock_refresh.assert_called_once()
+        assert smdb._canon("6975337031345") in result
+
+    def test_old_cache_version_triggers_refresh(self, tmp_path):
+        """A cache file predating codes/SKU support must not be misread."""
+        self._write_cache(tmp_path, {}, {}, [], [], version=1)
+
+        variants = smdb._parse_manufacturer_file("Bambu Lab", SAMPLE_MANUFACTURER_FILE)
+        gtin_index, sku_index = smdb._build_index(variants)
+        with patch(
+            "spoolmandb_community._refresh",
+            return_value=(gtin_index, sku_index, ["Bambu Lab"], variants),
+        ) as mock_refresh:
+            result = smdb.get_gtin_index()
             mock_refresh.assert_called_once()
         assert smdb._canon("6975337031345") in result
 
     def test_missing_variants_key_treated_as_stale(self, tmp_path):
         cache_file = tmp_path / "spoolmandb_community_index.json"
-        cache_file.write_text(json.dumps({"built_at": time.time(), "index": {}, "brands": []}))
+        cache_file.write_text(
+            json.dumps({"cache_version": smdb._CACHE_VERSION, "built_at": time.time(), "gtin_index": {}, "sku_index": {}, "brands": []})
+        )
 
         variants = smdb._parse_manufacturer_file("Bambu Lab", SAMPLE_MANUFACTURER_FILE)
-        fresh_index = smdb._build_index(variants)
-        with patch("spoolmandb_community._refresh", return_value=(fresh_index, ["Bambu Lab"], variants)) as mock_refresh:
-            result = smdb.get_index()
+        gtin_index, sku_index = smdb._build_index(variants)
+        with patch(
+            "spoolmandb_community._refresh",
+            return_value=(gtin_index, sku_index, ["Bambu Lab"], variants),
+        ) as mock_refresh:
+            result = smdb.get_gtin_index()
             mock_refresh.assert_called_once()
         assert smdb._canon("6975337031345") in result
 
     def test_lookup_returns_none_for_unknown_barcode(self, tmp_path):
-        cache_file = tmp_path / "spoolmandb_community_index.json"
         variants = smdb._parse_manufacturer_file("Bambu Lab", SAMPLE_MANUFACTURER_FILE)
-        index = smdb._build_index(variants)
-        cache_file.write_text(
-            json.dumps({"built_at": time.time(), "index": index, "brands": ["Bambu Lab"], "variants": variants})
-        )
+        gtin_index, sku_index = smdb._build_index(variants)
+        self._write_cache(tmp_path, gtin_index, sku_index, ["Bambu Lab"], variants)
         assert smdb.lookup("0000000000000") is None
 
-    def test_lookup_returns_fields_for_known_barcode(self, tmp_path):
-        cache_file = tmp_path / "spoolmandb_community_index.json"
+    def test_lookup_returns_fields_and_codes_for_known_barcode(self, tmp_path):
         variants = smdb._parse_manufacturer_file("Bambu Lab", SAMPLE_MANUFACTURER_FILE)
-        index = smdb._build_index(variants)
-        cache_file.write_text(
-            json.dumps({"built_at": time.time(), "index": index, "brands": ["Bambu Lab"], "variants": variants})
-        )
+        gtin_index, sku_index = smdb._build_index(variants)
+        self._write_cache(tmp_path, gtin_index, sku_index, ["Bambu Lab"], variants)
+
         result = smdb.lookup("6975337031345")
         assert result is not None
-        assert result["brand"] == "Bambu Lab"
+        fields, codes = result
+        assert fields["brand"] == "Bambu Lab"
+        assert any(c["kind"] == "sku" for c in codes)
+
+    def test_lookup_sku_returns_fields_and_codes(self, tmp_path):
+        variants = smdb._parse_manufacturer_file("Bambu Lab", SAMPLE_MANUFACTURER_FILE)
+        gtin_index, sku_index = smdb._build_index(variants)
+        self._write_cache(tmp_path, gtin_index, sku_index, ["Bambu Lab"], variants)
+
+        result = smdb.lookup_sku("ca19001")
+        assert result is not None
+        fields, codes = result
+        assert fields["color_name"] == "Ivory White"
+        assert any(c["kind"] == "gtin" for c in codes)
+
+    def test_lookup_sku_returns_none_for_unknown_code(self, tmp_path):
+        variants = smdb._parse_manufacturer_file("Bambu Lab", SAMPLE_MANUFACTURER_FILE)
+        gtin_index, sku_index = smdb._build_index(variants)
+        self._write_cache(tmp_path, gtin_index, sku_index, ["Bambu Lab"], variants)
+        assert smdb.lookup_sku("NOPE") is None

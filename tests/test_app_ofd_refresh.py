@@ -7,7 +7,7 @@ never even attempted the SpoolmanDB-Community refresh) or discard a
 SpoolmanDB-Community refresh that already succeeded.
 """
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 

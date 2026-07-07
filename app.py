@@ -334,17 +334,24 @@ def ofd_refresh():
     import ofd
     import spoolmandb_community
     log.info("OFD + SpoolmanDB-Community refresh started")
+
+    # Each refresh is independently guarded — an OFD network blip must not
+    # take down the whole endpoint (previously it returned 502 immediately
+    # and never even attempted the SpoolmanDB-Community refresh) or discard
+    # a SpoolmanDB-Community refresh that already succeeded.
     try:
         gtin_idx = ofd.get_gtin_index(force=True)
         article_idx = ofd.get_article_index()
         brands = len(ofd.get_brands())
+        ofd_codes = len(gtin_idx) + len(article_idx)
         log.info(
             "OFD refresh done: %d GTINs, %d article numbers, %d brands",
             len(gtin_idx), len(article_idx), brands,
         )
     except Exception as e:
         log.error("OFD refresh failed: %s", e)
-        return jsonify(ok=False, error=str(e)), 502
+        ofd_codes = 0
+        brands = 0
 
     try:
         smdb_gtin_idx = spoolmandb_community.get_gtin_index(force=True)
@@ -357,7 +364,7 @@ def ofd_refresh():
 
     return jsonify(
         ok=True,
-        barcodes=len(gtin_idx) + len(article_idx),
+        barcodes=ofd_codes,
         brands=brands,
         spoolmandb_community_barcodes=smdb_codes,
     )

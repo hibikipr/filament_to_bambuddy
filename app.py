@@ -58,6 +58,119 @@ ALLOWED_SPOOL_FIELDS = {
     "note", "cost_per_kg", "category", "storage_location", "data_origin",
 }
 
+# GTIN-8/12/13/14 are the only standard checksummed lengths; anything else (or
+# a failed checksum) is treated as a manufacturer SKU/article number instead —
+# e.g. a Code 128 "inventory barcode" with no UPC/EAN counterpart (some
+# Polymaker boxes ship with only this). Mirrors Bambuddy's
+# `_classify_code`/`_gtin_checksum_valid` in `backend/app/api/routes/inventory.py`.
+_GTIN_LENGTHS = (8, 12, 13, 14)
+
+
+def _gtin_checksum_valid(digits: str) -> bool:
+    payload, check = digits[:-1], int(digits[-1])
+    total = 0
+    for i, ch in enumerate(reversed(payload)):
+        total += int(ch) * (3 if i % 2 == 0 else 1)
+    return (10 - (total % 10)) % 10 == check
+
+
+def _classify_code(raw: str) -> tuple[str, str]:
+    """Canonicalize `raw` and classify it as ("gtin", digits) or ("sku", stripped-upper)."""
+    import re
+    import ofd
+
+    digits = re.sub(r"\D", "", raw or "")
+    if len(digits) in _GTIN_LENGTHS and _gtin_checksum_valid(digits):
+        return ofd._canon(raw), "gtin"
+    return (raw or "").strip().upper(), "sku"
+
+
+def _external_all_codes(code: str, kind: str) -> tuple | None:
+    """Cross-reference OFD and SpoolmanDB-Community for `code`, merging both hits.
+
+    Returns (fields, source, all_codes, title) where `source` is whichever
+    database resolved first, `fields` prefers that source's values but fills
+    any gaps (e.g. missing nozzle temps) from the other, and `all_codes` is
+    the union of every sibling code (other package-size GTINs, the refill
+    GTIN, the SKU/article number) discovered across both databases. If only
+    one database resolves `code` directly, its sibling codes are also probed
+    against the *other* database to recover cross-referenced fields/codes.
+    Mirrors Bambuddy's `_external_all_codes` in `backend/app/api/routes/inventory.py`.
+    """
+    import ofd
+    import spoolmandb_community
+
+    def _ofd_lookup(c, k):
+        return ofd.lookup(c) if k == "gtin" else ofd.lookup_article(c)
+
+    def _smdb_lookup(c, k):
+        return spoolmandb_community.lookup(c) if k == "gtin" else spoolmandb_community.lookup_sku(c)
+
+    try:
+        ofd_hit = _ofd_lookup(code, kind)
+    except Exception:
+        ofd_hit = None
+    try:
+        smdb_hit = _smdb_lookup(code, kind)
+    except Exception:
+        smdb_hit = None
+
+    if not ofd_hit and not smdb_hit:
+        return None
+
+    fields: dict = {}
+    all_codes: list = []
+    source = None
+    title = None
+
+    def _merge(hit, src_name):
+        nonlocal source, title
+        hit_fields, hit_codes = hit
+        for key, value in hit_fields.items():
+            if key == "_title":
+                continue
+            if value is not None and fields.get(key) is None:
+                fields[key] = value
+        if title is None and hit_fields.get("_title"):
+            title = hit_fields["_title"]
+        for entry in hit_codes:
+            if not any(existing["code"] == entry["code"] for existing in all_codes):
+                all_codes.append(entry)
+        if source is None:
+            source = src_name
+
+    if ofd_hit:
+        _merge(ofd_hit, "ofd")
+    if smdb_hit:
+        _merge(smdb_hit, "spoolmandb-community")
+
+    tried = {code}
+    for entry in list(all_codes):
+        if ofd_hit and smdb_hit:
+            break
+        sibling_code = entry["code"]
+        if sibling_code in tried:
+            continue
+        tried.add(sibling_code)
+        if not ofd_hit:
+            try:
+                probe = _ofd_lookup(sibling_code, entry["kind"])
+            except Exception:
+                probe = None
+            if probe:
+                _merge(probe, "ofd")
+                ofd_hit = probe
+        if not smdb_hit:
+            try:
+                probe = _smdb_lookup(sibling_code, entry["kind"])
+            except Exception:
+                probe = None
+            if probe:
+                _merge(probe, "spoolmandb-community")
+                smdb_hit = probe
+
+    return fields, source, all_codes, title
+
 
 def _get_version() -> str:
     """Resolve the running app's version for display in the GUI footer.
@@ -222,22 +335,32 @@ def ofd_refresh():
     import spoolmandb_community
     log.info("OFD + SpoolmanDB-Community refresh started")
     try:
-        idx = ofd.get_index(force=True)
+        gtin_idx = ofd.get_gtin_index(force=True)
+        article_idx = ofd.get_article_index()
         brands = len(ofd.get_brands())
-        log.info("OFD refresh done: %d barcodes, %d brands", len(idx), brands)
+        log.info(
+            "OFD refresh done: %d GTINs, %d article numbers, %d brands",
+            len(gtin_idx), len(article_idx), brands,
+        )
     except Exception as e:
         log.error("OFD refresh failed: %s", e)
         return jsonify(ok=False, error=str(e)), 502
 
     try:
-        smdb_idx = spoolmandb_community.get_index(force=True)
-        smdb_barcodes = len(smdb_idx)
-        log.info("SpoolmanDB-Community refresh done: %d barcodes", smdb_barcodes)
+        smdb_gtin_idx = spoolmandb_community.get_gtin_index(force=True)
+        smdb_sku_idx = spoolmandb_community.get_sku_index()
+        smdb_codes = len(smdb_gtin_idx) + len(smdb_sku_idx)
+        log.info("SpoolmanDB-Community refresh done: %d codes", smdb_codes)
     except Exception as e:
         log.error("SpoolmanDB-Community refresh failed: %s", e)
-        smdb_barcodes = 0
+        smdb_codes = 0
 
-    return jsonify(ok=True, barcodes=len(idx), brands=brands, spoolmandb_community_barcodes=smdb_barcodes)
+    return jsonify(
+        ok=True,
+        barcodes=len(gtin_idx) + len(article_idx),
+        brands=brands,
+        spoolmandb_community_barcodes=smdb_codes,
+    )
 
 
 @app.get("/api/health")
@@ -278,43 +401,50 @@ def health():
 
 @app.get("/api/lookup")
 def lookup():
-    """Resolve a barcode to filament fields: cache first, then OFD, then SpoolmanDB-Community."""
+    """Resolve a barcode or SKU to filament fields: cache first, then a
+    cross-referenced OFD/SpoolmanDB-Community lookup.
+
+    A scanned/typed code is classified server-side as a GTIN (checksummed,
+    standard length) or a manufacturer SKU/article number (e.g. a Code 128
+    "inventory barcode" with no UPC/EAN counterpart) via `_classify_code`,
+    then resolved through the matching path in each database. Whichever
+    database hits first, its sibling codes (other package-size GTINs, the
+    refill GTIN, the SKU) are cross-referenced against the *other* database
+    to fill in any missing fields — see `_external_all_codes`.
+    """
     barcode = (request.args.get("barcode") or "").strip()
     if not barcode:
         return jsonify(error="barcode required"), 400
 
-    # 1. Personal cache — your own confirmed entries win.
+    code, kind = _classify_code(barcode)
+
+    # 1. Personal cache — your own confirmed entries win. Checked under both
+    # the canonicalized code and the raw scanned/typed string, so cache
+    # entries written before this rework (keyed by the un-canonicalized
+    # value) still hit.
     cache = load_cache()
-    if barcode in cache:
+    cache_hit = cache.get(code)
+    if cache_hit is None and code != barcode:
+        cache_hit = cache.get(barcode)
+    if cache_hit is not None:
         log.info("lookup %s: cache hit", barcode)
-        return jsonify(barcode=barcode, source="cache", fields=cache[barcode], title=None)
+        return jsonify(barcode=code, source="cache", fields=cache_hit, title=None, linked_codes=[])
 
-    # 2. Open Filament Database — filament-specific, keyed by spool barcode (GTIN).
-    import ofd
-    ofd_fields = ofd.lookup(barcode)
-    if ofd_fields:
-        fields = {k: v for k, v in ofd_fields.items() if not k.startswith("_")}
-        fields.setdefault("label_weight", DEFAULT_LABEL_WEIGHT)
-        log.info("lookup %s: OFD hit — %s", barcode, ofd_fields.get("_title", ""))
-        return jsonify(barcode=barcode, source="ofd",
-                       title=ofd_fields.get("_title"), fields=fields)
+    # 2. Cross-referenced OFD + SpoolmanDB-Community lookup.
+    external = _external_all_codes(code, kind)
+    if external:
+        fields, source, all_codes, title = external
+        clean_fields = {k: v for k, v in fields.items() if not k.startswith("_")}
+        clean_fields.setdefault("label_weight", DEFAULT_LABEL_WEIGHT)
+        linked_codes = [c for c in all_codes if c["code"] != code]
+        log.info("lookup %s: %s hit — %s", barcode, source, title or "")
+        return jsonify(barcode=code, source=source, title=title, fields=clean_fields, linked_codes=linked_codes)
 
-    # 3. SpoolmanDB-Community — broader brand coverage than OFD, but far
-    # sparser barcode coverage, so it's a secondary fallback, not a replacement.
-    import spoolmandb_community
-    smdb_fields = spoolmandb_community.lookup(barcode)
-    if smdb_fields:
-        fields = {k: v for k, v in smdb_fields.items() if not k.startswith("_")}
-        fields.setdefault("label_weight", DEFAULT_LABEL_WEIGHT)
-        log.info("lookup %s: SpoolmanDB-Community hit — %s", barcode, smdb_fields.get("_title", ""))
-        return jsonify(barcode=barcode, source="spoolmandb-community",
-                       title=smdb_fields.get("_title"), fields=fields)
-
-    # 4. Not found — fill in manually (and it'll be remembered).
-    src = "amazon" if not barcode.isdigit() else "none"
+    # 3. Not found — fill in manually (and it'll be remembered).
+    src = "amazon" if kind == "sku" else "none"
     log.info("lookup %s: not found (source=%s)", barcode, src)
-    return jsonify(barcode=barcode, source=src,
-                   fields={"label_weight": DEFAULT_LABEL_WEIGHT}, title=None)
+    return jsonify(barcode=code, source=src,
+                   fields={"label_weight": DEFAULT_LABEL_WEIGHT}, title=None, linked_codes=[])
 
 
 def _extract_barcode(text: str) -> str | None:
@@ -342,7 +472,6 @@ def parse_endpoint():
     """
     from filament_parse import parse_title
     import ofd
-    import spoolmandb_community
     title = (request.args.get("title") or "").strip()
     if not title:
         return jsonify(fields={})
@@ -353,22 +482,22 @@ def parse_endpoint():
     fields = parse_title(title, extra_brands=brands)
 
     source, out_title = "parsed", title
+    linked_codes: list = []
     barcode = _extract_barcode(title)
+    resolved_code = barcode
     if barcode:
-        ofd_fields = ofd.lookup(barcode)
-        if ofd_fields:
-            fields = {**fields, **{k: v for k, v in ofd_fields.items() if not k.startswith("_")}}
-            source = "ofd"
-            out_title = ofd_fields.get("_title") or title
-        else:
-            smdb_fields = spoolmandb_community.lookup(barcode)
-            if smdb_fields:
-                fields = {**fields, **{k: v for k, v in smdb_fields.items() if not k.startswith("_")}}
-                source = "spoolmandb-community"
-                out_title = smdb_fields.get("_title") or title
+        code, kind = _classify_code(barcode)
+        external = _external_all_codes(code, kind)
+        if external:
+            ext_fields, ext_source, all_codes, ext_title = external
+            fields = {**fields, **{k: v for k, v in ext_fields.items() if not k.startswith("_") and v is not None}}
+            source = ext_source
+            out_title = ext_title or title
+            resolved_code = code
+            linked_codes = [c for c in all_codes if c["code"] != code]
 
     fields.setdefault("label_weight", DEFAULT_LABEL_WEIGHT)
-    return jsonify(fields=fields, title=out_title, barcode=barcode, source=source)
+    return jsonify(fields=fields, title=out_title, barcode=resolved_code, source=source, linked_codes=linked_codes)
 
 
 @app.post("/api/spool")
@@ -421,12 +550,25 @@ def add_spool():
             errors.append(str(e))
             break
 
-    # Remember the confirmed details for this barcode (learning cache).
+    # Remember the confirmed details for this barcode (learning cache), plus
+    # every cross-referenced sibling code — so a later scan of ANY of them
+    # (another package-size GTIN, the refill GTIN, the manufacturer SKU)
+    # resolves instantly as "remembered" instead of re-querying OFD/SpoolmanDB.
     if created and barcode:
         cache = load_cache()
         remembered = {k: v for k, v in fields.items()
                       if k in ALLOWED_SPOOL_FIELDS or k in ("diameter_mm",)}
-        cache[barcode] = remembered
+        code, kind = _classify_code(barcode)
+        cache[code] = remembered
+        try:
+            external = _external_all_codes(code, kind)
+        except Exception:
+            external = None
+        if external:
+            _, _, all_codes, _ = external
+            for entry in all_codes:
+                if entry["code"] != code:
+                    cache[entry["code"]] = remembered
         save_cache(cache)
 
     ok = created == quantity

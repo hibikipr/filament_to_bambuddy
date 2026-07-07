@@ -445,6 +445,17 @@ $('startBtn').onclick = async () => {
     // coming from.
     if(ZXingBrowser.BarcodeFormat){
       const F = ZXingBrowser.BarcodeFormat;
+      // TRY_HARDER (DecodeHintType value 3 — this UMD build only exports
+      // BarcodeFormat, not DecodeHintType, so the raw enum value is set
+      // directly on the reader's own hints Map) trades a bit of per-frame
+      // CPU for meaningfully better detection of dense/small 1D barcodes —
+      // e.g. some third-party spool boxes carry an Amazon FNSKU-style Code
+      // 128 label instead of a retail GTIN, and those are dense enough that
+      // ZXing's default (fast) mode misses them far more often than a
+      // phone's native camera scanner would.
+      reader.hints.set(3, true);
+      // possibleFormats' setter re-applies the whole hints map (including
+      // TRY_HARDER above) to the underlying reader, so order matters here.
       reader.possibleFormats = [F.UPC_A, F.UPC_E, F.EAN_13, F.EAN_8, F.QR_CODE, F.CODE_128];
     }
     $('videoWrap').classList.remove('hidden'); $('startBtn').classList.add('hidden');

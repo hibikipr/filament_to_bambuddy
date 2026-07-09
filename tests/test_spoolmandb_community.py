@@ -15,7 +15,9 @@ data so the two implementations can be sanity-checked against the same
 expected outputs.
 """
 
+import io
 import json
+import tarfile
 import time
 from unittest.mock import patch
 
@@ -289,6 +291,34 @@ class TestCachingAndLookup:
         ):
             smdb.get_gtin_index()
 
+    def test_empty_refresh_result_with_no_cache_raises(self, tmp_path):
+        """A refresh that parses to zero manufacturer files (e.g. the repo
+        layout changes and the path filter matches nothing) must not be
+        treated as a successful, cacheable refresh - with nothing to fall
+        back to, the caller must learn the refresh effectively failed."""
+        with (
+            patch("spoolmandb_community._download_and_parse_variants", return_value=[]),
+            pytest.raises(RuntimeError, match="zero manufacturer files"),
+        ):
+            smdb._refresh()
+        assert not (tmp_path / "spoolmandb_community_index.json").exists()
+
+    def test_empty_refresh_result_falls_back_to_stale_cache_untouched(self, tmp_path):
+        """An empty refresh must not clobber a good stale cache - the stale
+        entries keep serving lookups instead of "no match" for a full TTL."""
+        stale_time = time.time() - smdb.SPOOLMANDB_COMMUNITY_TTL_SECONDS - 10
+        variants = smdb._parse_manufacturer_file("Bambu Lab", SAMPLE_MANUFACTURER_FILE)
+        gtin_index, sku_index = smdb._build_index(variants)
+        self._write_cache(tmp_path, gtin_index, sku_index, ["Bambu Lab"], variants, built_at=stale_time)
+        cache_path = tmp_path / "spoolmandb_community_index.json"
+        before = cache_path.read_text()
+
+        with patch("spoolmandb_community._download_and_parse_variants", return_value=[]):
+            result = smdb.get_gtin_index()
+
+        assert smdb._canon("6975337031345") in result
+        assert cache_path.read_text() == before
+
     def test_refresh_writes_cache_atomically(self, tmp_path):
         """Cache writes go through a temp file + rename, never a partial file
         at the real path — even if a write is interrupted mid-way."""
@@ -336,3 +366,91 @@ class TestCachingAndLookup:
         gtin_index, sku_index = smdb._build_index(variants)
         self._write_cache(tmp_path, gtin_index, sku_index, ["Bambu Lab"], variants)
         assert smdb.lookup_sku("NOPE") is None
+
+
+def _manufacturer_json(name: str, ean: str) -> bytes:
+    return json.dumps(
+        {
+            "manufacturer": name,
+            "filaments": [{"name": "Test {color_name}", "material": "PLA", "colors": [{"name": "Red", "eans": [ean]}]}],
+        }
+    ).encode()
+
+
+def _build_tarball(files: dict) -> bytes:
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+        for name, content in files.items():
+            info = tarfile.TarInfo(name=name)
+            info.size = len(content)
+            tar.addfile(info, io.BytesIO(content))
+    return buf.getvalue()
+
+
+class _MockStreamResponse:
+    """Minimal stand-in for requests.Response as used by
+    `with requests.get(..., stream=True) as resp: ... resp.iter_content(...)`."""
+
+    def __init__(self, content: bytes):
+        self._content = content
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+    def raise_for_status(self):
+        pass
+
+    def iter_content(self, chunk_size=65536):
+        for i in range(0, len(self._content), chunk_size):
+            yield self._content[i : i + chunk_size]
+
+
+class TestDownloadAndParseVariantsSizeCaps:
+    """Covers the review finding (ported from bambuddy): the tarball download
+    and per-member reads were both unbounded, so a malformed or huge upstream
+    response could exhaust memory on the 24h auto-refresh."""
+
+    def test_successful_download_parses_all_members(self, monkeypatch):
+        tarball = _build_tarball(
+            {
+                "SpoolmanDB-Community-main/filaments/a.json": _manufacturer_json("A Co", "1111111111111"),
+                "SpoolmanDB-Community-main/filaments/b.json": _manufacturer_json("B Co", "2222222222222"),
+            }
+        )
+        monkeypatch.setattr(smdb.requests, "get", lambda *a, **k: _MockStreamResponse(tarball))
+
+        variants = smdb._download_and_parse_variants()
+
+        assert {v["manufacturer"] for v in variants} == {"A Co", "B Co"}
+
+    def test_oversized_member_is_skipped_others_still_parsed(self, monkeypatch):
+        small_file = _manufacturer_json("Small Co", "1111111111111")
+        huge_file = _manufacturer_json("Huge Co", "2222222222222") + b" " * 1000
+        monkeypatch.setattr(smdb, "_MAX_MEMBER_BYTES", len(small_file) + 10)
+        assert len(huge_file) > smdb._MAX_MEMBER_BYTES
+
+        tarball = _build_tarball(
+            {
+                "SpoolmanDB-Community-main/filaments/small.json": small_file,
+                "SpoolmanDB-Community-main/filaments/huge.json": huge_file,
+            }
+        )
+        monkeypatch.setattr(smdb.requests, "get", lambda *a, **k: _MockStreamResponse(tarball))
+
+        variants = smdb._download_and_parse_variants()
+
+        assert {v["manufacturer"] for v in variants} == {"Small Co"}
+
+    def test_total_download_size_over_cap_raises(self, monkeypatch):
+        monkeypatch.setattr(smdb, "_MAX_TARBALL_BYTES", 50)
+        tarball = _build_tarball(
+            {"SpoolmanDB-Community-main/filaments/a.json": _manufacturer_json("A Co", "1111111111111")}
+        )
+        assert len(tarball) > 50
+        monkeypatch.setattr(smdb.requests, "get", lambda *a, **k: _MockStreamResponse(tarball))
+
+        with pytest.raises(ValueError, match="exceeded"):
+            smdb._download_and_parse_variants()

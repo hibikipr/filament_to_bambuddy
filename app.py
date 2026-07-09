@@ -58,12 +58,12 @@ ALLOWED_SPOOL_FIELDS = {
     "note", "cost_per_kg", "category", "storage_location", "data_origin",
 }
 
-# GTIN-8/12/13/14 are the only standard checksummed lengths; anything else (or
-# a failed checksum) is treated as a manufacturer SKU/article number instead —
-# e.g. a Code 128 "inventory barcode" with no UPC/EAN counterpart (some
-# Polymaker boxes ship with only this). Mirrors Bambuddy's
-# `_classify_code`/`_gtin_checksum_valid` in `backend/app/api/routes/inventory.py`.
-_GTIN_LENGTHS = (8, 12, 13, 14)
+# GTIN-8/12/13/14 are the only standard checksummed lengths. The floor below
+# the max (rather than an exact 8/12/13/14 match) accounts for leading zeros
+# already stripped from the raw input — see _classify_code. Mirrors Bambuddy's
+# `classify_code`/`_gtin_checksum_valid` in `backend/app/schemas/spool.py`.
+_MIN_GTIN_LENGTH = 7
+_MAX_GTIN_LENGTH = 14
 
 
 def _gtin_checksum_valid(digits: str) -> bool:
@@ -75,13 +75,26 @@ def _gtin_checksum_valid(digits: str) -> bool:
 
 
 def _classify_code(raw: str) -> tuple[str, str]:
-    """Canonicalize `raw` and classify it as ("gtin", digits) or ("sku", stripped-upper)."""
-    import re
+    """Canonicalize `raw` and classify it as ("gtin", digits) or ("sku", stripped-upper).
+
+    Classifies the canonicalized (zero-stripped) form rather than the raw
+    input, then re-validates the checksum after re-padding to a full
+    GTIN-14 — the checksum is invariant to leading-zero padding (weights are
+    assigned right-to-left from the check digit, so a leading zero always
+    lands in a weight-agnostic position and contributes 0 to the sum no
+    matter how many precede it). Without this, a barcode already missing its
+    leading zero(s) (e.g. typed from a receipt showing the short form, or a
+    UPC-A with fewer digits than the exact 8/12/13/14-length gate this used
+    to require) fails the length check and gets classified as a SKU instead
+    of a GTIN — sending the external lookup to the wrong index.
+    """
     import ofd
 
-    digits = re.sub(r"\D", "", raw or "")
-    if len(digits) in _GTIN_LENGTHS and _gtin_checksum_valid(digits):
-        return ofd._canon(raw), "gtin"
+    canonical = ofd._canon(raw)
+    if _MIN_GTIN_LENGTH <= len(canonical) <= _MAX_GTIN_LENGTH and _gtin_checksum_valid(
+        canonical.zfill(_MAX_GTIN_LENGTH)
+    ):
+        return canonical, "gtin"
     return (raw or "").strip().upper(), "sku"
 
 

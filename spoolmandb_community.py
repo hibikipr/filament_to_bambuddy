@@ -42,6 +42,13 @@ SPOOLMANDB_COMMUNITY_MATERIALS_URL = "https://icezaza2543.github.io/SpoolmanDB-C
 SPOOLMANDB_COMMUNITY_CACHE = Path(os.getenv("SPOOLMANDB_COMMUNITY_CACHE_FILE", "spoolmandb_community_index.json"))
 SPOOLMANDB_COMMUNITY_TTL_SECONDS = 24 * 3600
 
+# The real tarball is ~13 MB and each per-manufacturer source file is a few
+# KB. These caps guard the 24h auto-refresh against a malformed or
+# maliciously huge upstream response filling memory - well above real usage,
+# but firm enough to abort instead of buffering an unbounded body.
+_MAX_TARBALL_BYTES = 64 * 1024 * 1024
+_MAX_MEMBER_BYTES = 8 * 1024 * 1024
+
 # Bump whenever the on-disk cache shape changes, so an old cache file (e.g.
 # pre-dating `codes`/SKU support) is treated as stale and rebuilt instead of
 # being misread.
@@ -184,22 +191,36 @@ def _all_codes_for(variant: dict) -> list:
 
 def _download_and_parse_variants() -> list:
     """Download the SpoolmanDB-Community repo tarball and parse every manufacturer source file."""
-    resp = requests.get(SPOOLMANDB_COMMUNITY_TARBALL_URL, timeout=120)
-    resp.raise_for_status()
+    chunks = bytearray()
+    with requests.get(SPOOLMANDB_COMMUNITY_TARBALL_URL, timeout=120, stream=True) as resp:
+        resp.raise_for_status()
+        for chunk in resp.iter_content(chunk_size=65536):
+            chunks.extend(chunk)
+            if len(chunks) > _MAX_TARBALL_BYTES:
+                raise ValueError(
+                    f"SpoolmanDB-Community tarball exceeded {_MAX_TARBALL_BYTES} byte cap - aborting download"
+                )
 
     variants = []
-    with tarfile.open(fileobj=io.BytesIO(resp.content), mode="r:gz") as tar:
+    with tarfile.open(fileobj=io.BytesIO(bytes(chunks)), mode="r:gz") as tar:
         for member in tar.getmembers():
             if not member.isfile():
                 continue
             parts = Path(member.name).parts
             if len(parts) < 2 or parts[-2] != "filaments" or not member.name.endswith(".json"):
                 continue
+            if member.size > _MAX_MEMBER_BYTES:
+                continue
             extracted = tar.extractfile(member)
             if not extracted:
                 continue
+            # Belt-and-braces against a tar header that understates the real
+            # member size: read one byte past the cap and bail if it's there.
+            content = extracted.read(_MAX_MEMBER_BYTES + 1)
+            if len(content) > _MAX_MEMBER_BYTES:
+                continue
             try:
-                data = json.loads(extracted.read())
+                data = json.loads(content)
             except (json.JSONDecodeError, ValueError):
                 continue
             manufacturer = data.get("manufacturer")
@@ -276,6 +297,14 @@ def _load_stale_cached():
 def _refresh() -> tuple:
     """Download + parse the repo tarball; build the indexes + brand list; cache all of it."""
     variants = _download_and_parse_variants()
+    if not variants:
+        # A 200 that parses to zero manufacturer files (e.g. the repo layout
+        # changes and the path filter matches nothing) must not overwrite a
+        # good cache with an empty one and silently return "no match" for
+        # everyone for a full TTL. _ensure_loaded's except-path already falls
+        # back to the stale cache on any refresh failure, so raising here
+        # reuses that fallback instead of caching this.
+        raise RuntimeError("SpoolmanDB-Community refresh parsed zero manufacturer files - keeping previous cache")
     gtin_index, sku_index = _build_index(variants)
     brands = sorted({v["manufacturer"] for v in variants if v.get("manufacturer")})
     try:

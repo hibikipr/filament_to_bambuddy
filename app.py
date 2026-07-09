@@ -30,7 +30,9 @@ import subprocess
 from pathlib import Path
 
 import requests
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, jsonify, make_response, render_template, request
+
+import i18n
 
 logging.basicConfig(
     level=logging.INFO,
@@ -232,9 +234,44 @@ def save_cache(cache: dict):
 
 # ── Routes ────────────────────────────────────────────────────────────────────
 
+LANG_COOKIE_NAME = "lang"
+LANG_COOKIE_MAX_AGE = 365 * 24 * 3600
+
+
+def _resolve_request_locale() -> str:
+    """?lang= query override > lang cookie > browser Accept-Language > default.
+
+    See i18n.resolve_locale for the actual precedence/matching logic — this
+    just pulls the three candidate values out of the current Flask request.
+    """
+    return i18n.resolve_locale(
+        request.headers.get("Accept-Language"),
+        request.args.get("lang"),
+        request.cookies.get(LANG_COOKIE_NAME),
+    )
+
+
 @app.get("/")
 def index():
-    return render_template("index.html", bambuddy_url=BAMBUDDY_URL, version=APP_VERSION)
+    lang = _resolve_request_locale()
+    translator = i18n.Translator(lang)
+    resp = make_response(
+        render_template(
+            "index.html",
+            bambuddy_url=BAMBUDDY_URL,
+            version=APP_VERSION,
+            lang=lang,
+            supported_langs=i18n.SUPPORTED_LANGS,
+            t=translator.t,
+            translations=i18n.TRANSLATIONS.get(lang, i18n.TRANSLATIONS[i18n.DEFAULT_LANG]),
+        )
+    )
+    # Remember an explicit ?lang= choice so it sticks on the next visit
+    # (e.g. after adding the PWA to the home screen, where there's no address
+    # bar to re-type ?lang= into).
+    if request.args.get("lang") in i18n.TRANSLATIONS:
+        resp.set_cookie(LANG_COOKIE_NAME, lang, max_age=LANG_COOKIE_MAX_AGE, samesite="Lax")
+    return resp
 
 
 @app.get("/sw.js")

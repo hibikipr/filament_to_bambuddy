@@ -65,8 +65,21 @@ class TestIndexRouteLanguage:
         assert '"material": "Material *"' in body
 
     def test_unsupported_accept_language_falls_back_to_english(self, client):
-        resp = client.get("/", headers={"Accept-Language": "fr-FR,fr;q=0.9"})
+        # Russian isn't one of Bambuddy's supported languages.
+        resp = client.get("/", headers={"Accept-Language": "ru-RU,ru;q=0.9"})
         assert b'<html lang="en">' in resp.data
+
+    @pytest.mark.parametrize("lang", i18n.SUPPORTED_LANGS)
+    def test_every_supported_language_renders_without_error(self, client, lang):
+        """Every language Bambuddy itself supports must render a full page
+        with no unrendered Jinja placeholders and a matching lang attribute —
+        a fast way to catch a typo'd key in any one language dict."""
+        resp = client.get(f"/?lang={lang}")
+        assert resp.status_code == 200
+        body = resp.data.decode()
+        assert f'<html lang="{lang}">' in body
+        assert "{{" not in body
+        assert f'const I18N_LANG = "{lang}";' in body
 
 
 class TestResolveRequestLocaleHelper:

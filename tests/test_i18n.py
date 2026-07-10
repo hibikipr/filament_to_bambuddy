@@ -90,21 +90,33 @@ class TestResolveLocale:
         assert i18n.resolve_locale("de-AT,de;q=0.9") == "de"
 
     def test_unsupported_accept_language_falls_back_to_default(self):
-        assert i18n.resolve_locale("fr-FR,fr;q=0.9") == i18n.DEFAULT_LANG
+        # Russian isn't one of Bambuddy's supported languages.
+        assert i18n.resolve_locale("ru-RU,ru;q=0.9") == i18n.DEFAULT_LANG
 
     def test_no_signal_at_all_falls_back_to_default(self):
         assert i18n.resolve_locale(None) == i18n.DEFAULT_LANG
 
     def test_unsupported_query_param_is_ignored_falls_through_to_cookie(self):
-        assert i18n.resolve_locale(None, query_lang="fr", cookie_lang="de") == "de"
+        assert i18n.resolve_locale(None, query_lang="ru", cookie_lang="de") == "de"
 
     def test_query_param_is_case_insensitive(self):
         assert i18n.resolve_locale(None, query_lang="DE") == "de"
 
+    def test_hyphenated_region_code_query_param_is_case_insensitive(self):
+        assert i18n.resolve_locale(None, query_lang="ZH-cn") == "zh-cn"
+
     def test_accept_language_picks_first_supported_entry_in_priority_order(self):
-        # "fr" (unsupported) is listed before "de" (supported) — the first
+        # "ru" (unsupported) is listed before "de" (supported) — the first
         # *supported* entry should win, not just the first entry overall.
-        assert i18n.resolve_locale("fr;q=0.9,de;q=0.8") == "de"
+        assert i18n.resolve_locale("ru;q=0.9,de;q=0.8") == "de"
+
+    def test_accept_language_matches_hyphenated_region_codes_directly(self):
+        # Bambuddy's own supported set includes hyphenated codes (pt-BR,
+        # zh-CN, zh-TW) that are themselves the "base" — not a region variant
+        # of some shorter supported tag — so these must match directly.
+        assert i18n.resolve_locale("pt-BR,pt;q=0.9") == "pt-br"
+        assert i18n.resolve_locale("zh-CN,zh;q=0.9") == "zh-cn"
+        assert i18n.resolve_locale("zh-TW,zh;q=0.9") == "zh-tw"
 
 
 class TestTranslationSetsAreComplete:

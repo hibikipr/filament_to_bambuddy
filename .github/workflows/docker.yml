@@ -1,11 +1,135 @@
-name: Docker build check
+name: Docker checks
 
 on: [push, pull_request]
 
 jobs:
-  build:
+  hadolint:
+    name: Lint Dockerfile
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: Dockerfile
+
+  build-and-smoke-test:
+    name: Build + run + smoke test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
-      - run: docker build .
+
+      # `docker build` alone only proves the image assembles - it doesn't
+      # prove the app actually starts (e.g. a Python module that COPY missed
+      # only fails at import time, when gunicorn boots). Load the image into
+      # the local daemon so the next step can actually run it.
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: filament-to-bambuddy:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Run container
+        run: |
+          docker run -d --name smoke-test -p 8088:8088 filament-to-bambuddy:ci
+
+      - name: Wait for the app to respond
+        run: |
+          for i in $(seq 1 30); do
+            if curl -fsS -o /dev/null http://localhost:8088/; then
+              echo "App responded after ${i}s"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "App never responded within 30s"
+          docker logs smoke-test
+          exit 1
+
+      - name: Check the root page and health endpoint
+        run: |
+          status=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8088/)
+          if [ "$status" != "200" ]; then
+            echo "GET / returned $status, expected 200"
+            docker logs smoke-test
+            exit 1
+          fi
+          # No BAMBUDDY_API_KEY is set in CI, so this legitimately reports
+          # ok:false - the point is that the endpoint itself responds and
+          # returns well-formed JSON, not that Bambuddy is reachable.
+          health_status=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8088/api/health)
+          if [ "$health_status" != "200" ]; then
+            echo "GET /api/health returned $health_status, expected 200"
+            docker logs smoke-test
+            exit 1
+          fi
+
+      - name: Wait for the container HEALTHCHECK to report healthy
+        run: |
+          for i in $(seq 1 30); do
+            status=$(docker inspect --format='{{.State.Health.Status}}' smoke-test)
+            if [ "$status" = "healthy" ]; then
+              echo "Container healthy after ${i}s"
+              exit 0
+            fi
+            if [ "$status" = "unhealthy" ]; then
+              echo "Container reported unhealthy"
+              docker logs smoke-test
+              exit 1
+            fi
+            sleep 1
+          done
+          echo "Container never reported healthy within 30s"
+          docker inspect --format='{{json .State.Health}}' smoke-test
+          docker logs smoke-test
+          exit 1
+
+      - name: Check logs for tracebacks/errors
+        if: always()
+        run: |
+          docker logs smoke-test 2>&1 | tee /tmp/smoke-test.log
+          if grep -qi "Traceback\|ModuleNotFoundError\|ImportError" /tmp/smoke-test.log; then
+            echo "Found a traceback/import error in the container logs"
+            exit 1
+          fi
+
+      - name: Tear down
+        if: always()
+        run: docker rm -f smoke-test
+
+  trivy-scan:
+    name: Scan image for vulnerabilities
+    runs-on: ubuntu-latest
+    needs: build-and-smoke-test
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: filament-to-bambuddy:ci
+          cache-from: type=gha
+
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: filament-to-bambuddy:ci
+          format: sarif
+          output: trivy-results.sarif
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+
+      - name: Upload results to the Security tab
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-results.sarif

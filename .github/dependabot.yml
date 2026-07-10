@@ -1,0 +1,28 @@
+version: 2
+updates:
+  # requirements.txt (flask, requests) + gunicorn/pytest pinned in CI installs.
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      python-dependencies:
+        patterns: ["*"]
+    labels: ["dependencies", "python"]
+
+  # Actions used in .github/workflows/*.yml (actions/checkout, docker/*, etc).
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      github-actions:
+        patterns: ["*"]
+    labels: ["dependencies", "github-actions"]
+
+  # The `FROM python:3.12-slim` base image in Dockerfile.
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    labels: ["dependencies", "docker"]

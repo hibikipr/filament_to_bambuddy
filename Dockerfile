@@ -1,4 +1,4 @@
-FROM python:3.12-slim
+FROM python:3.14-slim
 
 # Set at build time from the release git tag (see .github/workflows/docker-publish.yml);
 # defaults to "dev" for a plain local `docker build` with no --build-arg.

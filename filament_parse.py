@@ -96,7 +96,7 @@ def _find_material(text_upper: str) -> tuple[str | None, str | None]:
     """
     for token, canonical in BASE_MATERIALS:
         if re.search(r"(?<![A-Z])" + re.escape(token) + r"(?![A-Z])", text_upper):
-            sub = "Plus" if token.endswith("+") or token.endswith("PLUS") else None
+            sub = "Plus" if token.endswith(("+", "PLUS")) else None
             return canonical, sub
     return None, None
 
@@ -170,7 +170,7 @@ def _find_weight_grams(text: str) -> int | None:
     """Net filament weight in grams from tokens like '1KG', '1000g', '0.5kg', '500 g'."""
     m = re.search(r"(\d+(?:\.\d+)?)\s*(kg|kgs|kilograms?)\b", text, re.IGNORECASE)
     if m:
-        return int(round(float(m.group(1)) * 1000))
+        return round(float(m.group(1)) * 1000)
     m = re.search(r"(\d{3,5})\s*(g|grams?)\b", text, re.IGNORECASE)
     if m:
         return int(m.group(1))

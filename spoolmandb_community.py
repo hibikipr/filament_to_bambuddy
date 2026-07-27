@@ -29,6 +29,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 import io
 import json
+import logging
 import os
 import re
 import tarfile
@@ -36,6 +37,8 @@ import time
 from pathlib import Path
 
 import requests
+
+log = logging.getLogger(__name__)
 
 SPOOLMANDB_COMMUNITY_TARBALL_URL = "https://codeload.github.com/Icezaza2543/SpoolmanDB-Community/tar.gz/refs/heads/main"
 SPOOLMANDB_COMMUNITY_MATERIALS_URL = "https://icezaza2543.github.io/SpoolmanDB-Community/materials.json"
@@ -132,7 +135,7 @@ def _parse_manufacturer_file(manufacturer: str, data: dict) -> list:
         label_weight = None
         if weights:
             try:
-                label_weight = int(round(float(weights[0]["weight"])))
+                label_weight = round(float(weights[0]["weight"]))
             except (TypeError, ValueError, KeyError):
                 label_weight = None
         nozzle_temp_min, nozzle_temp_max = _extruder_temps(filament)
@@ -349,7 +352,7 @@ def _refresh() -> tuple:
         )
         tmp_path.replace(SPOOLMANDB_COMMUNITY_CACHE)
     except Exception:
-        pass
+        log.warning("Failed to write SpoolmanDB-Community cache file", exc_info=True)
     return gtin_index, sku_index, brands, variants
 
 

@@ -20,7 +20,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 import sys
 
-if sys.version_info < (3, 10):
+if sys.version_info < (3, 10):  # noqa: UP036 - guards direct `python app.py` runs on an old system Python, independent of the Docker image's pinned version
     sys.exit(f"❌ Python 3.10+ required (this is {sys.version.split()[0]}).")
 
 import json
@@ -160,7 +160,11 @@ def _external_all_codes(code: str, kind: str) -> tuple | None:
         _merge(smdb_hit, "spoolmandb-community")
 
     tried = {code}
-    for entry in list(all_codes):
+    # list(...) is required, not redundant: _merge() below appends newly
+    # cross-referenced codes to all_codes, so iterating a live view of it
+    # here would pick up entries added mid-loop instead of just the
+    # original siblings.
+    for entry in list(all_codes):  # noqa: PERF101
         if ofd_hit and smdb_hit:
             break
         sibling_code = entry["code"]
@@ -204,11 +208,14 @@ def _get_version() -> str:
             capture_output=True,
             text=True,
             timeout=3,
+            check=False,  # returncode is checked explicitly below, not raised on
         )
         if result.returncode == 0 and result.stdout.strip():
             return result.stdout.strip()
     except Exception:
-        pass
+        # Expected/benign when not running from a git checkout (e.g. inside
+        # the Docker image, which doesn't copy .git) - debug, not a warning.
+        log.debug("git describe unavailable", exc_info=True)
     return "dev"
 
 
@@ -319,7 +326,7 @@ def _bambuddy_locations() -> list[str]:
         if r.ok:
             return [loc.get("name") for loc in r.json() if loc.get("name")]
     except Exception:
-        pass
+        log.debug("Bambuddy location fetch failed (best-effort)", exc_info=True)
     return []
 
 
@@ -511,7 +518,7 @@ def _extract_barcode(text: str) -> str | None:
     12–14 digit run. Returns digits only, or None.
     """
     import re
-    m = re.search(r"(?:EAN|UPC|GTIN|BARCODE)\s*[:#]?\s*(\d[\d\s]{6,16}\d)", text, re.I)
+    m = re.search(r"(?:EAN|UPC|GTIN|BARCODE)\s*[:#]?\s*(\d[\d\s]{6,16}\d)", text, re.IGNORECASE)
     cand = re.sub(r"\D", "", m.group(1)) if m else None
     if not cand:
         m = re.search(r"(?<!\d)(\d{12,14})(?!\d)", text)
@@ -527,8 +534,8 @@ def parse_endpoint():
     that barcode up (OFD, then SpoolmanDB-Community) — authoritative data
     overrides the guesses when found.
     """
-    from filament_parse import parse_title
     import ofd
+    from filament_parse import parse_title
     title = (request.args.get("title") or "").strip()
     if not title:
         return jsonify(fields={})

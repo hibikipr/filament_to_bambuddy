@@ -17,7 +17,7 @@ class TestClassifyCode:
 
     def test_bad_checksum_falls_back_to_sku(self):
         # Right length (12 digits) but an invalid check digit.
-        code, kind = app._classify_code("099999999999")
+        _code, kind = app._classify_code("099999999999")
         assert kind == "sku"
 
     def test_alphanumeric_code_is_sku(self):
@@ -26,7 +26,7 @@ class TestClassifyCode:
         assert app._classify_code("ALZMNTABS01") == ("ALZMNTABS01", "sku")
 
     def test_short_digit_string_below_floor_is_sku(self):
-        code, kind = app._classify_code("12345")
+        _code, kind = app._classify_code("12345")
         assert kind == "sku"
 
     def test_leading_zero_upc_a_still_classifies_gtin_after_stripping(self):

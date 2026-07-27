@@ -25,13 +25,13 @@ class TestIndexRouteLanguage:
         resp = client.get("/")
         assert resp.status_code == 200
         assert b'<html lang="en">' in resp.data
-        assert "Filament details".encode() in resp.data
+        assert b"Filament details" in resp.data
 
     def test_query_param_overrides_default(self, client):
         resp = client.get("/?lang=de")
         assert resp.status_code == 200
         assert b'<html lang="de">' in resp.data
-        assert "Filament-Details".encode() in resp.data
+        assert b"Filament-Details" in resp.data
 
     def test_query_param_sets_a_persistent_cookie(self, client):
         resp = client.get("/?lang=de")

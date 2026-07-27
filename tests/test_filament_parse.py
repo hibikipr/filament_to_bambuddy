@@ -1,6 +1,11 @@
 import pytest
-from filament_parse import parse_title, _find_nozzle_temps, _find_weight_grams, _find_diameter
 
+from filament_parse import (
+    _find_diameter,
+    _find_nozzle_temps,
+    _find_weight_grams,
+    parse_title,
+)
 
 # ── parse_title: the four example titles from the module's __main__ block ─────
 

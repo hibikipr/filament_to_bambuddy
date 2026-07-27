@@ -172,7 +172,7 @@ class TestAllCodesFor:
 class TestBuildIndex:
     def test_indexes_eans_and_eans_refill(self):
         variants = smdb._parse_manufacturer_file("Bambu Lab", SAMPLE_MANUFACTURER_FILE)
-        gtin_index, sku_index = smdb._build_index(variants)
+        gtin_index, _sku_index = smdb._build_index(variants)
         assert smdb._canon("6975337031345") in gtin_index
         assert smdb._canon("6975337035053") in gtin_index
         assert smdb._canon("1234567890128") in gtin_index
@@ -180,7 +180,7 @@ class TestBuildIndex:
 
     def test_indexes_codes_as_sku(self):
         variants = smdb._parse_manufacturer_file("Bambu Lab", SAMPLE_MANUFACTURER_FILE)
-        gtin_index, sku_index = smdb._build_index(variants)
+        _gtin_index, sku_index = smdb._build_index(variants)
         assert "CA19001" in sku_index
         assert sku_index["CA19001"]["fields"]["color_name"] == "Ivory White"
 

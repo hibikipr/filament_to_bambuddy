@@ -104,7 +104,7 @@ class TestBuildIndex:
 
     def test_orphaned_variant_skipped(self):
         broken = {**SAMPLE_ALL_JSON, "variants": []}
-        gtin_index, article_index, variant_codes = ofd._build_index(broken)
+        gtin_index, _article_index, _variant_codes = ofd._build_index(broken)
         assert gtin_index == {}
 
     def test_upc_a_and_ean_13_gtin_produce_same_key(self):
@@ -162,7 +162,7 @@ class TestBuildIndex:
                 },
             ],
         }
-        gtin_index, article_index, variant_codes = ofd._build_index(data)
+        gtin_index, _article_index, variant_codes = ofd._build_index(data)
         big = ofd._canon("06938936716785")
         small = ofd._canon("06938936716786")
         assert gtin_index[big]["fields"]["label_weight"] == 1000

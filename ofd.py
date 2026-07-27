@@ -21,12 +21,15 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 """
 
 import json
+import logging
 import os
 import re
 import time
 from pathlib import Path
 
 import requests
+
+log = logging.getLogger(__name__)
 
 OFD_ALL_URL = "https://api.openfilamentdatabase.org/json/all.json"
 OFD_CACHE = Path(os.getenv("OFD_CACHE_FILE", "ofd_index.json"))
@@ -135,7 +138,7 @@ def _build_index(all_json: dict) -> tuple:
             fields["rgba"] = rgba
         if size.get("filament_weight"):
             try:
-                fields["label_weight"] = int(round(float(size["filament_weight"])))
+                fields["label_weight"] = round(float(size["filament_weight"]))
             except (TypeError, ValueError):
                 pass
         for src, dst in (("min_print_temperature", "nozzle_temp_min"),
@@ -252,7 +255,7 @@ def _refresh() -> tuple:
         )
         tmp_path.replace(OFD_CACHE)
     except Exception:
-        pass
+        log.warning("Failed to write OFD cache file", exc_info=True)
     return gtin_index, article_index, variant_codes, brands
 
 

@@ -1,0 +1,19 @@
+[tool.ruff]
+target-version = "py312"
+
+[tool.ruff.lint]
+ignore = [
+    # This app talks to two external filament databases (OFD,
+    # SpoolmanDB-Community) and Bambuddy itself, plus reads/writes disk
+    # caches — every one of those call sites is deliberately designed to
+    # degrade gracefully (fall back to a stale cache, an empty list, or
+    # "not found") on ANY failure, not just exceptions enumerated up
+    # front, since a new/unexpected failure mode should never crash a
+    # background refresh or a best-effort lookup. Narrowing each of these
+    # to specific exception types would just be guessing at what upstream
+    # might someday raise, and would reintroduce the exact bug class this
+    # bought us: e.g. the SpoolmanDB-Community EAN-guard hardening (a
+    # single malformed entry raising TypeError and aborting a refresh)
+    # that these blanket catches now guard against uniformly.
+    "BLE001",
+]

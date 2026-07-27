@@ -155,6 +155,19 @@ class TestAllCodesFor:
         v = next(v for v in variants if v["color_name"] == "No Barcode Blue")
         assert smdb._all_codes_for(v) == []
 
+    def test_non_string_ean_is_skipped_not_raised(self):
+        """Covers the review finding (ported from bambuddy): a single malformed
+        upstream EAN serialized as a number would otherwise raise TypeError in
+        _canon() and abort the whole refresh for every manufacturer."""
+        variant = {"eans": [6975337031345, "6975337031346"], "eans_refill": [None], "codes": []}
+        codes = smdb._all_codes_for(variant)
+        assert codes == [{"code": "6975337031346", "kind": "gtin", "is_refill": False}]
+
+    def test_non_string_sku_is_skipped_not_raised(self):
+        variant = {"eans": [], "eans_refill": [], "codes": [12345, "CA19001"]}
+        codes = smdb._all_codes_for(variant)
+        assert codes == [{"code": "CA19001", "kind": "sku", "is_refill": False}]
+
 
 class TestBuildIndex:
     def test_indexes_eans_and_eans_refill(self):
@@ -453,4 +466,22 @@ class TestDownloadAndParseVariantsSizeCaps:
         monkeypatch.setattr(smdb.requests, "get", lambda *a, **k: _MockStreamResponse(tarball))
 
         with pytest.raises(ValueError, match="exceeded"):
+            smdb._download_and_parse_variants()
+
+    def test_total_decompressed_size_over_cap_raises(self, monkeypatch):
+        """The per-member cap alone doesn't bound the sum across many members -
+        several files each individually under _MAX_MEMBER_BYTES could still
+        decompress to a large total. This is the residual decompression-bomb
+        guard on top of the per-member cap."""
+        files = {
+            f"SpoolmanDB-Community-main/filaments/co{i}.json": _manufacturer_json(f"Co {i}", "1111111111111")
+            for i in range(5)
+        }
+        member_size = len(next(iter(files.values())))
+        monkeypatch.setattr(smdb, "_MAX_MEMBER_BYTES", member_size + 10)
+        monkeypatch.setattr(smdb, "_MAX_TOTAL_DECOMPRESSED_BYTES", member_size * 3)
+        tarball = _build_tarball(files)
+        monkeypatch.setattr(smdb.requests, "get", lambda *a, **k: _MockStreamResponse(tarball))
+
+        with pytest.raises(ValueError, match="decompressed contents exceeded"):
             smdb._download_and_parse_variants()

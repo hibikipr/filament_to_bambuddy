@@ -628,7 +628,13 @@ function loadScript(src){
   return new Promise((res,rej)=>{ const s=document.createElement('script'); s.src=src; s.onload=res; s.onerror=rej; document.head.appendChild(s); });
 }
 function loadImage(file){
-  return new Promise((res,rej)=>{ const img=new Image(); img.onload=()=>res(img); img.onerror=rej; img.src=URL.createObjectURL(file); });
+  return new Promise((res,rej)=>{
+    const img=new Image();
+    const objectUrl=URL.createObjectURL(file);
+    img.onload=()=>{ URL.revokeObjectURL(objectUrl); res(img); };
+    img.onerror=(err)=>{ URL.revokeObjectURL(objectUrl); rej(err); };
+    img.src=objectUrl;
+  });
 }
 // Draw the image rotated by `deg`, downscaled to maxDim for speed.
 function rotatedCanvas(img, deg, maxDim){
@@ -649,24 +655,39 @@ function scoreText(text){
   return letters + (cue?80:0);
 }
 // OCR the photo trying each orientation; keep the best (handles sideways/upside-down).
+// Creates one worker and reuses it across all rotation attempts instead of
+// letting Tesseract.recognize() spin up (and tear down) a fresh worker per
+// call — that also re-fetches the core/lang assets from scratch each time.
 async function ocrBestOrientation(file){
   const img=await loadImage(file);
-  let best={text:'', score:-1};
-  for(const deg of [0,90,270,180]){
-    const canvas=rotatedCanvas(img, deg, 1600);
-    const { data } = await Tesseract.recognize(canvas, 'eng', { logger: m => {
+  let currentDeg=0;
+  const worker = await Tesseract.createWorker('eng', Tesseract.OEM.LSTM_ONLY, {
+    workerPath: '/static/tesseract/worker.min.js',
+    corePath: '/static/tesseract/tesseract-core-lstm.wasm.js',
+    langPath: '/static/tesseract',
+    logger: m => {
       if(m.status==='recognizing text'){
-        $('ocrHint').textContent = deg
-          ? t('ocr.reading_label_rotated', {deg, percent:Math.round(m.progress*100)})
+        $('ocrHint').textContent = currentDeg
+          ? t('ocr.reading_label_rotated', {deg:currentDeg, percent:Math.round(m.progress*100)})
           : t('ocr.reading_label');
       }
-    }});
-    const text=(data.text||'').replace(/\s+/g,' ').trim();
-    const score=scoreText(text);
-    if(score>best.score) best={text,score};
-    if(score>=120) break;   // strong result — no need to try more rotations
+    },
+  });
+  try{
+    let best={text:'', score:-1};
+    for(const deg of [0,90,270,180]){
+      currentDeg=deg;
+      const canvas=rotatedCanvas(img, deg, 1600);
+      const { data } = await worker.recognize(canvas);
+      const text=(data.text||'').replace(/\s+/g,' ').trim();
+      const score=scoreText(text);
+      if(score>best.score) best={text,score};
+      if(score>=120) break;   // strong result — no need to try more rotations
+    }
+    return best.text;
+  } finally {
+    await worker.terminate();
   }
-  return best.text;
 }
 
 $('ocrBtn').onclick = () => $('labelPhoto').click();
@@ -675,7 +696,7 @@ $('labelPhoto').onchange = async (e) => {
   try{
     if(!window.Tesseract){
       $('ocrHint').textContent=t('ocr.loading_recognizer');
-      await loadScript('https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js');
+      await loadScript('/static/tesseract/tesseract.min.js');
     }
     $('ocrHint').textContent=t('ocr.reading_label');
     const text = await ocrBestOrientation(file);

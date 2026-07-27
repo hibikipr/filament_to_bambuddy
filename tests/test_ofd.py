@@ -14,11 +14,33 @@ implementations can be sanity-checked against the same expected outputs.
 
 import json
 import time
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
 import ofd
+
+
+class _MockStreamResponse:
+    """Minimal stand-in for requests.Response as used by
+    `with requests.get(..., stream=True) as resp: ... resp.iter_content(...)`.
+    Mirrors the identically-named helper in test_spoolmandb_community.py."""
+
+    def __init__(self, content: bytes):
+        self._content = content
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+    def raise_for_status(self):
+        pass
+
+    def iter_content(self, chunk_size=65536):
+        for i in range(0, len(self._content), chunk_size):
+            yield self._content[i : i + chunk_size]
 
 
 class TestCanon:
@@ -233,11 +255,8 @@ class TestCachingAndLookup:
         """Cache writes go through a temp file + rename, never a partial file
         at the real path — even if a write is interrupted mid-way."""
         cache_path = tmp_path / "ofd_cache.json"
-        mock_response = MagicMock()
-        mock_response.raise_for_status = MagicMock()
-        mock_response.json = MagicMock(return_value=SAMPLE_ALL_JSON)
 
-        with patch("ofd.requests.get", return_value=mock_response):
+        with patch("ofd.requests.get", return_value=_MockStreamResponse(json.dumps(SAMPLE_ALL_JSON).encode())):
             ofd._refresh()
 
         assert cache_path.exists()
@@ -250,12 +269,8 @@ class TestCachingAndLookup:
         dump shape changes) must not be treated as a successful, cacheable
         refresh — with nothing to fall back to, the caller must learn the
         refresh effectively failed."""
-        empty_response = MagicMock()
-        empty_response.raise_for_status = MagicMock()
-        empty_response.json = MagicMock(return_value={})
-
         with (
-            patch("ofd.requests.get", return_value=empty_response),
+            patch("ofd.requests.get", return_value=_MockStreamResponse(b"{}")),
             pytest.raises(RuntimeError, match="zero entries"),
         ):
             ofd._refresh()
@@ -271,15 +286,41 @@ class TestCachingAndLookup:
         cache_path = tmp_path / "ofd_cache.json"
         before = cache_path.read_text()
 
-        empty_response = MagicMock()
-        empty_response.raise_for_status = MagicMock()
-        empty_response.json = MagicMock(return_value={})
-
-        with patch("ofd.requests.get", return_value=empty_response):
+        with patch("ofd.requests.get", return_value=_MockStreamResponse(b"{}")):
             result = ofd.get_gtin_index()
 
         assert ofd._canon("06938936716785") in result
         assert cache_path.read_text() == before
+
+    def test_total_download_size_over_cap_raises(self, monkeypatch, tmp_path):
+        """Covers the review finding (ported from bambuddy): _refresh()
+        buffered the whole response with no size cap, so a large or slow
+        upstream response could OOM the app on the 24h auto-refresh."""
+        monkeypatch.setattr(ofd, "_MAX_ALL_JSON_BYTES", 50)
+        body = json.dumps(SAMPLE_ALL_JSON).encode()
+        assert len(body) > 50
+
+        with (
+            patch("ofd.requests.get", return_value=_MockStreamResponse(body)),
+            pytest.raises(ValueError, match="exceeded"),
+        ):
+            ofd._refresh()
+
+        assert not (tmp_path / "ofd_cache.json").exists()
+
+    def test_total_size_cap_exceeded_falls_back_to_stale_disk_cache(self, monkeypatch, tmp_path):
+        stale_time = time.time() - ofd.OFD_TTL_SECONDS - 10
+        gtin_index, article_index, variant_codes = ofd._build_index(SAMPLE_ALL_JSON)
+        self._write_cache(tmp_path, gtin_index, article_index, variant_codes, ["Sunlu"], built_at=stale_time)
+
+        monkeypatch.setattr(ofd, "_MAX_ALL_JSON_BYTES", 50)
+        body = json.dumps(SAMPLE_ALL_JSON).encode()
+        assert len(body) > 50
+
+        with patch("ofd.requests.get", return_value=_MockStreamResponse(body)):
+            result = ofd.get_gtin_index()
+
+        assert ofd._canon("06938936716785") in result
 
     def test_lookup_returns_none_for_unknown_barcode(self, tmp_path):
         gtin_index, article_index, variant_codes = ofd._build_index(SAMPLE_ALL_JSON)

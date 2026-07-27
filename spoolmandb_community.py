@@ -48,6 +48,11 @@ SPOOLMANDB_COMMUNITY_TTL_SECONDS = 24 * 3600
 # but firm enough to abort instead of buffering an unbounded body.
 _MAX_TARBALL_BYTES = 64 * 1024 * 1024
 _MAX_MEMBER_BYTES = 8 * 1024 * 1024
+# The per-member cap alone doesn't bound the sum across many members - a
+# tarball with thousands of entries each just under _MAX_MEMBER_BYTES would
+# still decompress to a huge total in memory. This is the residual
+# decompression-bomb guard on top of that.
+_MAX_TOTAL_DECOMPRESSED_BYTES = 256 * 1024 * 1024
 
 # Bump whenever the on-disk cache shape changes, so an old cache file (e.g.
 # pre-dating `codes`/SKU support) is treated as stale and rebuilt instead of
@@ -179,11 +184,21 @@ def _all_codes_for(variant: dict) -> list:
     """Every code (GTIN or SKU) associated with one variant, tagged by kind/refill-ness."""
     codes = []
     for barcode in variant.get("eans") or []:
+        # _canon() assumes a string (re.sub raises TypeError on anything
+        # else) - a single malformed upstream EAN (e.g. serialized as a
+        # number instead of a string) would otherwise raise here and abort
+        # the whole refresh for every manufacturer, not just the offending one.
+        if not isinstance(barcode, str) or not barcode.strip():
+            continue
         codes.append({"code": _canon(barcode), "kind": "gtin", "is_refill": False})
     for barcode in variant.get("eans_refill") or []:
+        if not isinstance(barcode, str) or not barcode.strip():
+            continue
         codes.append({"code": _canon(barcode), "kind": "gtin", "is_refill": True})
     for code in variant.get("codes") or []:
-        normalized = (code or "").strip().upper()
+        if not isinstance(code, str):
+            continue
+        normalized = code.strip().upper()
         if normalized:
             codes.append({"code": normalized, "kind": "sku", "is_refill": False})
     return codes
@@ -202,6 +217,7 @@ def _download_and_parse_variants() -> list:
                 )
 
     variants = []
+    total_decompressed = 0
     with tarfile.open(fileobj=io.BytesIO(bytes(chunks)), mode="r:gz") as tar:
         for member in tar.getmembers():
             if not member.isfile():
@@ -219,6 +235,12 @@ def _download_and_parse_variants() -> list:
             content = extracted.read(_MAX_MEMBER_BYTES + 1)
             if len(content) > _MAX_MEMBER_BYTES:
                 continue
+            total_decompressed += len(content)
+            if total_decompressed > _MAX_TOTAL_DECOMPRESSED_BYTES:
+                raise ValueError(
+                    f"SpoolmanDB-Community tarball's decompressed contents exceeded "
+                    f"{_MAX_TOTAL_DECOMPRESSED_BYTES} byte cap - aborting"
+                )
             try:
                 data = json.loads(content)
             except (json.JSONDecodeError, ValueError):
@@ -245,12 +267,12 @@ def _build_index(variants: list) -> tuple:
         fields = {key: variant.get(key) for key in _BARCODE_FIELD_KEYS}
         all_codes = _all_codes_for(variant)
         entry = {"fields": fields, "all_codes": all_codes}
-        for barcode in (*variant.get("eans", []), *variant.get("eans_refill", [])):
-            gtin_index[_canon(barcode)] = entry
-        for code in variant.get("codes") or []:
-            normalized = (code or "").strip().upper()
-            if normalized:
-                sku_index[normalized] = entry
+        # Index from all_codes (already type-guarded/canonicalized by
+        # _all_codes_for) instead of re-reading the raw eans/eans_refill/codes
+        # lists here - avoids duplicating the non-string guard in two places.
+        for code_entry in all_codes:
+            index = gtin_index if code_entry["kind"] == "gtin" else sku_index
+            index[code_entry["code"]] = entry
     return gtin_index, sku_index
 
 

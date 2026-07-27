@@ -32,6 +32,11 @@ OFD_ALL_URL = "https://api.openfilamentdatabase.org/json/all.json"
 OFD_CACHE = Path(os.getenv("OFD_CACHE_FILE", "ofd_index.json"))
 OFD_TTL_SECONDS = 24 * 3600
 
+# Generous cap against a malicious/broken upstream serving an oversized or
+# infinite response — the real dump is a small fraction of this. Mirrors the
+# same guard spoolmandb_community.py already has on its tarball download.
+_MAX_ALL_JSON_BYTES = 128 * 1024 * 1024
+
 # Bump whenever the on-disk cache shape changes, so an old cache file (e.g.
 # pre-dating article_number/variant-code support) is treated as stale and
 # rebuilt instead of being misread.
@@ -206,9 +211,18 @@ def _load_stale_cached() -> tuple | None:
 
 def _refresh() -> tuple:
     """Download all.json; build the indexes + brand-name list; cache all of it."""
-    resp = requests.get(OFD_ALL_URL, timeout=60)
-    resp.raise_for_status()
-    all_json = resp.json()
+    chunks = bytearray()
+    # Streamed with a running size cap rather than requests.get(...).json() —
+    # the latter buffers the whole response with no ceiling, so a large or
+    # slow upstream response (malicious or just broken) could OOM the app on
+    # the 24h auto-refresh.
+    with requests.get(OFD_ALL_URL, timeout=60, stream=True) as resp:
+        resp.raise_for_status()
+        for chunk in resp.iter_content(chunk_size=65536):
+            chunks.extend(chunk)
+            if len(chunks) > _MAX_ALL_JSON_BYTES:
+                raise ValueError(f"OFD all.json exceeded {_MAX_ALL_JSON_BYTES} byte cap - aborting download")
+    all_json = json.loads(bytes(chunks))
     gtin_index, article_index, variant_codes = _build_index(all_json)
     brands = sorted({b["name"] for b in all_json.get("brands", []) if b.get("name")})
     if not gtin_index and not article_index:

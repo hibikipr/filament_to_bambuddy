@@ -7,8 +7,8 @@ jobs:
     name: Lint Dockerfile
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: hadolint/hadolint-action@v3.1.0
+      - uses: actions/checkout@v7
+      - uses: hadolint/hadolint-action@v3.4.0
         with:
           dockerfile: Dockerfile
 
@@ -16,15 +16,15 @@ jobs:
     name: Build + run + smoke test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v3
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
 
       # `docker build` alone only proves the image assembles - it doesn't
       # prove the app actually starts (e.g. a Python module that COPY missed
       # only fails at import time, when gunicorn boots). Load the image into
       # the local daemon so the next step can actually run it.
       - name: Build image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           load: true
@@ -108,11 +108,11 @@ jobs:
       contents: read
       security-events: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v3
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
 
       - name: Build image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           load: true

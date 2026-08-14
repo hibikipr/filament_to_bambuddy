@@ -26,7 +26,7 @@ VOLUME ["/data"]
 EXPOSE 8088
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-  CMD python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8088/',timeout=4).status==200 else 1)"
+  CMD ["python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8088/',timeout=4).status==200 else 1)"]
 
 # One worker (shared in-memory OFD index) + threads for the blocking HTTP calls.
 # --access-logfile - sends HTTP access logs to stdout so they appear in docker logs.

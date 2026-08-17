@@ -1,5 +1,14 @@
 FROM python:3.14-slim
 
+# The base image's own OS packages lag Debian's security patch cadence —
+# util-linux (util-linux/mount/login/libuuid1/libsmartcols1/libmount1/
+# liblastlog2-2/libblkid1/bsdutils, all built from the same source package)
+# was flagged by CI's Trivy scan at 2.41-5 with several CVEs fixed in
+# 2.41.3-1/2.41.5-0+deb13u1. Upgrading here (rather than waiting on the next
+# python:3.14-slim rebuild) keeps every build current regardless of how
+# stale the upstream base image's own OS layer is.
+RUN apt-get update && apt-get upgrade -y && rm -rf /var/lib/apt/lists/*
+
 # Set at build time from the release git tag (see .github/workflows/docker-publish.yml);
 # defaults to "dev" for a plain local `docker build` with no --build-arg.
 ARG VERSION=dev

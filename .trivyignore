@@ -1,0 +1,20 @@
+# Trivy misreads pip's internal build-dependency manifest
+# (pip/_vendor/vendor.txt) as if setuptools and msgpack were installed,
+# top-level, independently-reachable packages. Neither is, verified by
+# inspecting the built image directly:
+#
+#   - setuptools' code isn't present anywhere in the image. pip only
+#     references its pinned version as the build backend it WOULD fall back
+#     to if it ever needed to build a package from source — never triggered
+#     here since requirements.txt installs entirely from prebuilt wheels.
+#   - msgpack IS vendored, but privately inside pip's own internals
+#     (pip/_vendor/msgpack), used only by pip's own HTTP cache during
+#     `pip install`. Never imported by this app, and never reachable at
+#     container runtime since pip isn't invoked after the image is built.
+#
+# Re-check with a fresh build + `find / -iname '*setuptools*'` /
+# `find / -iname '*msgpack*'` before removing these — the right fix is
+# pip itself bumping its own vendored pins, not something addressable here.
+GHSA-6v7p-g79w-8964
+CVE-2025-47273
+CVE-2026-59890

@@ -158,10 +158,9 @@
     <select id="material" required></select>
 
     <div class="row">
-      <div><label>{{ t('form.brand') }}</label><input id="brand" list="brandList" autocomplete="off"></div>
+      <div><label>{{ t('form.brand') }}</label><select id="brand"></select></div>
       <div><label>{{ t('form.subtype') }}</label><select id="subtype"></select></div>
     </div>
-    <datalist id="brandList"></datalist>
 
     <div class="row">
       <div><label>{{ t('form.color_name') }}</label><input id="color_name" list="colorList" autocomplete="off"></div>
@@ -317,10 +316,10 @@ async function loadOptions(){
   try{ OPTS = await (await fetch('/api/options')).json(); }
   catch(e){ OPTS = {materials:[],subtypes:[],weights:[1000],colors:[],brands:[],locations:[]}; }
   fillSelect('material', OPTS.materials, {blank:true});
+  fillSelect('brand', OPTS.brands, {blank:true});
   fillSelect('subtype', OPTS.subtypes, {blank:true});
   fillSelect('label_weight', OPTS.weights.map(String));
   fillSelect('storage_location', OPTS.locations, {blank:true});
-  fillDatalist('brandList', OPTS.brands);
   fillDatalist('colorList', OPTS.colors);
   setSelect('label_weight','1000');
 }
@@ -565,7 +564,7 @@ function colorInputToRgba(hex){ return hex.replace('#','').toUpperCase()+'FF'; }
 // object actually has a value (so it merges over manual edits).
 function applyFields(f){
   if(f.material!=null) setSelect('material', f.material);
-  if(f.brand!=null) $('brand').value = f.brand;
+  if(f.brand!=null) setSelect('brand', f.brand);
   if(f.subtype!=null) setSelect('subtype', f.subtype);
   if(f.color_name!=null) $('color_name').value = f.color_name;
   if(f.rgba){ const c=hexToColorInput(f.rgba); if(c) $('color_picker').value=c; }
@@ -615,9 +614,9 @@ function fillForm(d){
   // 'Forget' only makes sense for a remembered (cache) entry with a barcode.
   $('forgetBtn').classList.toggle('hidden', !(code && d.source==='cache'));
   // reset then apply
-  ['brand','color_name','category','nozzle_temp_min','nozzle_temp_max',
+  ['color_name','category','nozzle_temp_min','nozzle_temp_max',
    'cost_per_kg','note','paste_title'].forEach(id=>$(id).value='');
-  setSelect('material',''); setSelect('subtype',''); setSelect('storage_location','');
+  setSelect('material',''); setSelect('brand',''); setSelect('subtype',''); setSelect('storage_location','');
   setSelect('label_weight','1000'); $('quantity').value=1;
   applyFields(f);
   $('material').focus();

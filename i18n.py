@@ -1245,19 +1245,31 @@ def resolve_locale(
     supported set; Accept-Language is parsed permissively (region subtags
     like "en-US" fall back to their base "en").
     """
+    # Returning `lang_code` (sourced from TRANSLATIONS' own keys) rather than
+    # the normalized request value itself, even though they're equal here,
+    # keeps the result provably one of a fixed set of known-safe strings
+    # instead of attacker-influenced data that merely passed a membership
+    # check — the distinction matters for anything (like a cookie value)
+    # this return value later flows into.
     for candidate in (query_lang, cookie_lang):
-        if candidate and candidate.strip().lower() in TRANSLATIONS:
-            return candidate.strip().lower()
+        if not candidate:
+            continue
+        normalized = candidate.strip().lower()
+        for lang_code in TRANSLATIONS:
+            if lang_code == normalized:
+                return lang_code
 
     if accept_language_header:
         for part in accept_language_header.split(","):
             code = part.split(";")[0].strip().lower()
             if not code:
                 continue
-            if code in TRANSLATIONS:
-                return code
+            for lang_code in TRANSLATIONS:
+                if lang_code == code:
+                    return lang_code
             base = code.split("-")[0]
-            if base in TRANSLATIONS:
-                return base
+            for lang_code in TRANSLATIONS:
+                if lang_code == base:
+                    return lang_code
 
     return DEFAULT_LANG

@@ -2,6 +2,9 @@ name: Docker checks
 
 on: [push, pull_request]
 
+permissions:
+  contents: read
+
 jobs:
   hadolint:
     name: Lint Dockerfile
@@ -19,6 +22,13 @@ jobs:
       - uses: actions/checkout@v7
       - uses: docker/setup-buildx-action@v4
 
+      # Forces the Dockerfile's `apt-get upgrade` layer to actually re-run
+      # once a day instead of being served from the GHA cache forever, so
+      # newly-published Debian security patches keep landing in the image.
+      - name: Compute daily cache-bust value
+        id: cachebust
+        run: echo "date=$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
+
       # `docker build` alone only proves the image assembles - it doesn't
       # prove the app actually starts (e.g. a Python module that COPY missed
       # only fails at import time, when gunicorn boots). Load the image into
@@ -29,6 +39,8 @@ jobs:
           context: .
           load: true
           tags: filament-to-bambuddy:ci
+          build-args: |
+            CACHE_BUST=${{ steps.cachebust.outputs.date }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -111,12 +123,18 @@ jobs:
       - uses: actions/checkout@v7
       - uses: docker/setup-buildx-action@v4
 
+      - name: Compute daily cache-bust value
+        id: cachebust
+        run: echo "date=$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
+
       - name: Build image
         uses: docker/build-push-action@v7
         with:
           context: .
           load: true
           tags: filament-to-bambuddy:ci
+          build-args: |
+            CACHE_BUST=${{ steps.cachebust.outputs.date }}
           cache-from: type=gha
 
       - name: Run Trivy vulnerability scanner

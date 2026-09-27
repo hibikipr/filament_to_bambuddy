@@ -439,13 +439,16 @@ def health():
     try:
         r = requests.get(f"{BAMBUDDY_URL}/api/v1/inventory/spools",
                          headers=headers, params={"limit": 1}, timeout=10)
-    except requests.exceptions.SSLError as e:
-        return jsonify(ok=False, bambuddy=BAMBUDDY_URL, error=f"TLS error: {e}"), 200
+    except requests.exceptions.SSLError:
+        log.warning("bambuddy health check: TLS error contacting %s", BAMBUDDY_URL, exc_info=True)
+        return jsonify(ok=False, bambuddy=BAMBUDDY_URL, error="TLS error contacting Bambuddy — check the URL/certificate"), 200
     except requests.exceptions.ConnectionError:
         return jsonify(ok=False, bambuddy=BAMBUDDY_URL,
                        error=f"cannot connect to {BAMBUDDY_URL} (wrong URL, or not on the same network?)"), 200
     except Exception as e:
-        return jsonify(ok=False, bambuddy=BAMBUDDY_URL, error=str(e)), 200
+        log.exception("bambuddy health check failed unexpectedly")
+        return jsonify(ok=False, bambuddy=BAMBUDDY_URL,
+                       error=f"{type(e).__name__} — see server logs"), 200
 
     if r.ok:
         return jsonify(ok=True, bambuddy=BAMBUDDY_URL, status=r.status_code)
@@ -518,7 +521,12 @@ def _extract_barcode(text: str) -> str | None:
     12–14 digit run. Returns digits only, or None.
     """
     import re
-    m = re.search(r"(?:EAN|UPC|GTIN|BARCODE)\s*[:#]?\s*(\d[\d\s]{6,16}\d)", text, re.IGNORECASE)
+    # The separator between the label and the digits is wrapped in an atomic
+    # group: without it, its optional \s* overlaps with the [\d\s] class right
+    # after it, and a long run of spaces with no trailing digit makes the
+    # regex engine try every possible split between the two — O(n^2) blowup
+    # (confirmed: 50k spaces took ~24s before, ~3ms after).
+    m = re.search(r"(?:EAN|UPC|GTIN|BARCODE)(?>\s*[:#]?\s*)(\d[\d\s]{6,16}\d)", text, re.IGNORECASE)
     cand = re.sub(r"\D", "", m.group(1)) if m else None
     if not cand:
         m = re.search(r"(?<!\d)(\d{12,14})(?!\d)", text)
@@ -611,7 +619,8 @@ def add_spool():
                 errors.append(f"{r.status_code}: {r.text[:200]}")
                 break
         except Exception as e:
-            errors.append(str(e))
+            log.exception("error posting spool to Bambuddy")
+            errors.append(f"{type(e).__name__} — see server logs")
             break
 
     # Remember the confirmed details for this barcode (learning cache), plus

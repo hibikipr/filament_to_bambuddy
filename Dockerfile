@@ -7,7 +7,15 @@ FROM python:3.14-slim
 # 2.41.3-1/2.41.5-0+deb13u1. Upgrading here (rather than waiting on the next
 # python:3.14-slim rebuild) keeps every build current regardless of how
 # stale the upstream base image's own OS layer is.
-RUN apt-get update && apt-get upgrade -y && rm -rf /var/lib/apt/lists/*
+#
+# CACHE_BUST forces this layer to actually re-run instead of being served
+# from the GHA/Buildx layer cache forever (nothing before it in the
+# Dockerfile ever changes, so without this the "upgrade" above silently
+# stops upgrading anything after the first cached build) — CI passes the
+# build date so each day's first CI run picks up newly-published patches.
+ARG CACHE_BUST=dev
+RUN echo "apt cache bust: ${CACHE_BUST}" \
+    && apt-get update && apt-get upgrade -y && rm -rf /var/lib/apt/lists/*
 
 # Set at build time from the release git tag (see .github/workflows/docker-publish.yml);
 # defaults to "dev" for a plain local `docker build` with no --build-arg.

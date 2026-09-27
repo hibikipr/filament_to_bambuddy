@@ -59,6 +59,7 @@ jobs:
           else
             echo "value=dev-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
           fi
+          echo "date=$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
 
       - name: Build and push
         uses: docker/build-push-action@v7
@@ -70,5 +71,6 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             VERSION=${{ steps.version.outputs.value }}
+            CACHE_BUST=${{ steps.version.outputs.date }}
           cache-from: type=gha
           cache-to: type=gha,mode=max

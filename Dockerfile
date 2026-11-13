@@ -1,4 +1,4 @@
-FROM python:3.14-slim
+FROM python:3.15-slim
 
 # The base image's own OS packages lag Debian's security patch cadence —
 # util-linux (util-linux/mount/login/libuuid1/libsmartcols1/libmount1/

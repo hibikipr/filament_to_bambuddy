@@ -108,7 +108,7 @@ class TestParseManufacturerFile:
         v = next(v for v in variants if v["color_name"] == "Ivory White")
         assert v["brand"] == "Bambu Lab"
         assert v["material"] == "PLA"
-        assert v["subtype"] == "Matte PLA"
+        assert v["subtype"] == "Matte"
         assert v["rgba"] == "FFFFFFFF"
         assert v["label_weight"] == 1000
         assert v["nozzle_temp_min"] == 220
@@ -485,3 +485,84 @@ class TestDownloadAndParseVariantsSizeCaps:
 
         with pytest.raises(ValueError, match="decompressed contents exceeded"):
             smdb._download_and_parse_variants()
+
+
+class TestEffectFromFinish:
+    @pytest.mark.parametrize("kwargs,expected", [
+        ({"multi_color_direction": "coaxial", "color_count": 2}, "dual-color"),
+        ({"multi_color_direction": "coaxial", "color_count": 3}, "tri-color"),
+        ({"multi_color_direction": "coaxial", "color_count": 4}, "multicolor"),
+        ({"multi_color_direction": "longitudinal", "color_count": 3}, "gradient"),
+        ({"glow": True, "finish": "matte"}, "glow"),
+        ({"pattern": "marble"}, "marble"),
+        ({"translucent": True}, "translucent"),
+        ({"finish": "silk"}, "silk"),
+        ({"finish": "matte"}, "matte"),
+        ({"finish": "glossy"}, None),
+        ({}, None),
+    ])
+    def test_mapping(self, kwargs, expected):
+        assert smdb.effect_from_finish(**kwargs) == expected
+
+
+class TestFinishAndMulticolourFields:
+    def test_dual_colour_variant_gets_effect_and_extra_colors(self):
+        variants = smdb._parse_manufacturer_file("Bambu Lab", SAMPLE_MANUFACTURER_FILE)
+        v = next(v for v in variants if v["color_name"] == "Black/White")
+        assert v["effect_type"] == "dual-color"
+        assert v["extra_colors"] == "000000,FFFFFF"
+
+    def test_filament_level_finish_applies_to_colours(self):
+        data = {"filaments": [{
+            "name": "{color_name}", "material": "PLA", "finish": "silk",
+            "weights": [{"weight": 1000}], "diameters": [1.75],
+            "colors": [{"name": "Gold", "hex": "D4AF37"},
+                       {"name": "Copper", "hex": "B87333", "finish": "matte"}],
+        }]}
+        variants = smdb._parse_manufacturer_file("X", data)
+        assert [v["effect_type"] for v in variants] == ["silk", "matte"]
+
+    def test_wood_fill_is_wood_effect(self):
+        data = {"filaments": [{"name": "Wood {color_name}", "material": "PLA", "fill": "wood",
+                               "weights": [{"weight": 1000}], "diameters": [1.75],
+                               "colors": [{"name": "Oak", "hex": "A0522D"}]}]}
+        (v,) = smdb._parse_manufacturer_file("X", data)
+        assert v["effect_type"] == "wood"
+
+    def test_index_carries_effect_fields(self):
+        variants = smdb._parse_manufacturer_file("Bambu Lab", SAMPLE_MANUFACTURER_FILE)
+        gtin_index, _ = smdb._build_index(variants)
+        fields = gtin_index[smdb._canon("1234567890128")]["fields"]
+        assert fields["effect_type"] == "dual-color"
+        assert fields["extra_colors"] == "000000,FFFFFF"
+
+
+class TestSizeChoice:
+    def test_prefers_1kg_weight_within_a_filament(self):
+        data = {"filaments": [{
+            "name": "{color_name}", "material": "PLA", "diameters": [1.75],
+            "weights": [{"weight": 3000}, {"weight": 1000}, {"weight": 5000}],
+            "colors": [{"name": "Red", "hex": "FF0000", "eans": ["1234567890128"]}],
+        }]}
+        (v,) = smdb._parse_manufacturer_file("X", data)
+        assert v["label_weight"] == 1000
+
+    def test_shared_code_keeps_175_1kg_entry(self):
+        """SpoolmanDB gives several sizes the same EAN; the likeliest box wins,
+        not whichever entry came last."""
+        def fil(diameter, weight):
+            return {"name": "{color_name}", "material": "PLA", "diameters": [diameter],
+                    "weights": [{"weight": weight}],
+                    "colors": [{"name": "Red", "hex": "FF0000", "eans": ["1234567890128"]}]}
+        data = {"filaments": [fil(1.75, 3000), fil(1.75, 1000), fil(2.85, 1000), fil(1.75, 5000)]}
+        variants = smdb._parse_manufacturer_file("X", data)
+        gtin_index, _ = smdb._build_index(variants)
+        assert gtin_index[smdb._canon("1234567890128")]["fields"]["label_weight"] == 1000
+
+
+class TestStrictLookup:
+    def test_lookup_raises_when_strict_and_index_unavailable(self):
+        with patch.object(smdb, "get_gtin_index", side_effect=RuntimeError("offline")):
+            assert smdb.lookup("1234567890128") is None
+            with pytest.raises(RuntimeError):
+                smdb.lookup("1234567890128", strict=True)

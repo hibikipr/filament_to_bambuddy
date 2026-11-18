@@ -24,8 +24,16 @@ ARG VERSION=dev
 WORKDIR /app
 
 # Deps first for layer caching. gunicorn serves the Flask app in production.
+#
+# pip is upgraded first because the base image's pip bundles its own private
+# copies of urllib3, msgpack and others (pip/_vendor), and Trivy flags those
+# whenever they fall behind: the base image's pip (26.2 or older) bundled urllib3
+# 2.7.0 and msgpack 1.1.2 (CVE-2026-97687/97688/97689, CVE-2026-114613).
+# pip 26.3 bundles the fixed urllib3 2.8.0 and msgpack 1.2.4. These copies
+# only run during `pip install` at build time, never in the running app.
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt gunicorn
+RUN pip install --no-cache-dir --upgrade "pip>=26.3" \
+    && pip install --no-cache-dir -r requirements.txt gunicorn
 
 # App code
 COPY app.py ofd.py filament_parse.py label_reader.py spoolmandb_community.py i18n.py ./

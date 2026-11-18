@@ -18,3 +18,10 @@
 GHSA-6v7p-g79w-8964
 CVE-2025-47273
 CVE-2026-59890
+
+# setuptools path escape via namespace_packages.txt during legacy wheel
+# installation (low). Same pip/_vendor/vendor.txt pin as above: every pip
+# release, 26.3 included, still lists setuptools==70.3.0 as its fallback
+# build backend, so upgrading pip doesn't clear it. setuptools' code isn't
+# in the image, and the advisory only affects Windows paths.
+GHSA-xmj3-9gf7-h52w

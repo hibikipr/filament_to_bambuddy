@@ -310,8 +310,12 @@ def _codes_for_variant(variant_id: str) -> list:
     return list(_VARIANT_CODES.get(variant_id, [])) if _VARIANT_CODES else []
 
 
-def lookup(barcode: str) -> tuple | None:
+def lookup(barcode: str, strict: bool = False) -> tuple | None:
     """Resolve a GTIN barcode: (fields, all_codes) for its colour, or None if not found.
+
+    With ``strict``, raises when the index couldn't be loaded at all (no
+    network and no cached copy), so the caller can tell "couldn't check"
+    from "not in the database".
 
     ``all_codes`` includes every GTIN/SKU sibling (other package sizes, the
     refill code, the manufacturer article number) sharing the same colour.
@@ -319,6 +323,8 @@ def lookup(barcode: str) -> tuple | None:
     try:
         idx = get_gtin_index()
     except Exception:
+        if strict:
+            raise
         return None
     entry = idx.get(_canon(barcode))
     if not entry:
@@ -326,11 +332,13 @@ def lookup(barcode: str) -> tuple | None:
     return entry["fields"], _codes_for_variant(entry["variant_id"])
 
 
-def lookup_article(code: str) -> tuple | None:
+def lookup_article(code: str, strict: bool = False) -> tuple | None:
     """Resolve a manufacturer SKU/article number the same way `lookup` resolves a GTIN."""
     try:
         idx = get_article_index()
     except Exception:
+        if strict:
+            raise
         return None
     entry = idx.get((code or "").strip().upper())
     if not entry:

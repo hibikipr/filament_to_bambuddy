@@ -60,7 +60,9 @@ _MAX_TOTAL_DECOMPRESSED_BYTES = 256 * 1024 * 1024
 # Bump whenever the on-disk cache shape changes, so an old cache file (e.g.
 # pre-dating `codes`/SKU support) is treated as stale and rebuilt instead of
 # being misread.
-_CACHE_VERSION = 2
+# 3: fields gained effect_type/extra_colors, and a code shared by several
+# sizes keeps the likeliest one.
+_CACHE_VERSION = 3
 
 # In-process cache so we don't re-download/rebuild on every request.
 _GTIN_INDEX: dict | None = None
@@ -107,6 +109,79 @@ def _subtype_from_template(name_template: str) -> str | None:
     return s or None
 
 
+def _product_line(subtype: str | None, material: str) -> str | None:
+    """The product line without the material word: "PLA Basic" → "Basic",
+    "Matte PLA" → "Matte". Bambuddy keeps the material in its own field."""
+    if not subtype:
+        return None
+    if material:
+        subtype = re.sub(rf"(?<![A-Za-z0-9]){re.escape(material)}(?![A-Za-z0-9])", "", subtype, flags=re.IGNORECASE)
+    subtype = re.sub(r"\s+", " ", subtype).strip(" -+")
+    return subtype or None
+
+
+def _hex6(raw) -> str | None:
+    if not isinstance(raw, str):
+        return None
+    h = raw.lstrip("#")
+    return h[:6].upper() if len(h) >= 6 and re.fullmatch(r"[0-9A-Fa-f]{6}", h[:6]) else None
+
+
+def effect_from_finish(finish=None, pattern=None, multi_color_direction=None,
+                       color_count: int = 0, glow=False, translucent=False) -> str | None:
+    """Bambuddy's effect_type for SpoolmanDB's finish fields.
+
+    Structure first, as Bambuddy draws it (a coaxial two-colour filament is a
+    split however it's finished), then glow, pattern, translucency, and matte
+    last. Glossy is the default finish: no effect. Same mapping as NozzleCast's
+    SpoolmanDBCommunityClient.effect.
+    """
+    direction = (multi_color_direction or "").lower() if isinstance(multi_color_direction, str) else ""
+    if direction == "coaxial":
+        return "dual-color" if color_count == 2 else "tri-color" if color_count == 3 else "multicolor"
+    if direction == "longitudinal":
+        return "gradient"
+    if glow is True:
+        return "glow"
+    pattern = pattern.lower() if isinstance(pattern, str) else ""
+    if pattern in ("sparkle", "marble", "wood"):
+        return pattern
+    if translucent is True:
+        return "translucent"
+    finish = finish.lower() if isinstance(finish, str) else ""
+    if finish in ("matte", "silk"):
+        return finish
+    return None
+
+
+def _weight_grams(entry) -> float | None:
+    try:
+        return float(entry["weight"])
+    except (TypeError, ValueError, KeyError):
+        return None
+
+
+def _pick_weight(weights: list) -> int | None:
+    """One filament lists every spool size it's sold in; a box is most often
+    the 1 kg one, so prefer that and fall back to the first listed."""
+    grams = [g for g in (_weight_grams(w) for w in weights or []) if g]
+    if not grams:
+        return None
+    return round(next((g for g in grams if abs(g - 1000) < 1), grams[0]))
+
+
+def size_rank(diameters, label_weight) -> int:
+    """How likely an entry is the box in hand when one code covers several:
+    1.75 mm beats 2.85 mm, then 1 kg beats the bigger spools."""
+    ds = diameters if isinstance(diameters, list) else [diameters]
+    rank = 0
+    if any(isinstance(d, (int, float)) and abs(d - 1.75) < 0.01 for d in ds):
+        rank += 2
+    if label_weight is not None and abs(label_weight - 1000) < 1:
+        rank += 1
+    return rank
+
+
 def _extruder_temps(filament: dict) -> tuple:
     temp_range = filament.get("extruder_temp_range")
     if isinstance(temp_range, list) and len(temp_range) == 2:
@@ -130,14 +205,9 @@ def _parse_manufacturer_file(manufacturer: str, data: dict) -> list:
     for filament in data.get("filaments", []):
         material = filament.get("material") or ""
         name_template = filament.get("name") or ""
-        subtype = _subtype_from_template(name_template)
-        weights = filament.get("weights") or []
-        label_weight = None
-        if weights:
-            try:
-                label_weight = round(float(weights[0]["weight"]))
-            except (TypeError, ValueError, KeyError):
-                label_weight = None
+        subtype = _product_line(_subtype_from_template(name_template), material)
+        label_weight = _pick_weight(filament.get("weights") or [])
+        rank = size_rank(filament.get("diameters") or [], label_weight)
         nozzle_temp_min, nozzle_temp_max = _extruder_temps(filament)
 
         for color in filament.get("colors", []):
@@ -147,8 +217,24 @@ def _parse_manufacturer_file(manufacturer: str, data: dict) -> list:
             eans = color.get("eans") or []
             eans_refill = color.get("eans_refill") or []
             codes = color.get("codes") or []
+            part_hexes = [h for h in (_hex6(x) for x in (hexes or [])) if h] if isinstance(hexes, list) else []
 
-            title_bits = [manufacturer, subtype, color_name]
+            # Finish fields sit on the colour or, for a whole line, on the
+            # filament; the colour's own value wins.
+            def finish_field(key, color=color, filament=filament):
+                return color[key] if key in color else filament.get(key)
+
+            effect_type = effect_from_finish(
+                finish=finish_field("finish"),
+                # SpoolmanDB records wood as a fill, not a pattern.
+                pattern=finish_field("pattern") or ("wood" if finish_field("fill") == "wood" else None),
+                multi_color_direction=finish_field("multi_color_direction"),
+                color_count=len(part_hexes),
+                glow=finish_field("glow"),
+                translucent=finish_field("translucent"),
+            )
+
+            title_bits = [manufacturer, _subtype_from_template(name_template), color_name]
             variants.append(
                 {
                     "manufacturer": manufacturer,
@@ -158,6 +244,9 @@ def _parse_manufacturer_file(manufacturer: str, data: dict) -> list:
                     "color_name": color_name,
                     "rgba": rgba,
                     "hexes": hexes,
+                    "extra_colors": ",".join(part_hexes) if len(part_hexes) >= 2 else None,
+                    "effect_type": effect_type,
+                    "size_rank": rank,
                     "label_weight": label_weight,
                     "nozzle_temp_min": nozzle_temp_min,
                     "nozzle_temp_max": nozzle_temp_max,
@@ -176,6 +265,8 @@ _BARCODE_FIELD_KEYS = (
     "subtype",
     "color_name",
     "rgba",
+    "extra_colors",
+    "effect_type",
     "label_weight",
     "nozzle_temp_min",
     "nozzle_temp_max",
@@ -266,15 +357,25 @@ def _build_index(variants: list) -> tuple:
     """
     gtin_index: dict = {}
     sku_index: dict = {}
+    ranks: dict = {}
     for variant in variants:
         fields = {key: variant.get(key) for key in _BARCODE_FIELD_KEYS}
         all_codes = _all_codes_for(variant)
         entry = {"fields": fields, "all_codes": all_codes}
+        rank = variant.get("size_rank") or 0
         # Index from all_codes (already type-guarded/canonicalized by
         # _all_codes_for) instead of re-reading the raw eans/eans_refill/codes
         # lists here - avoids duplicating the non-string guard in two places.
         for code_entry in all_codes:
             index = gtin_index if code_entry["kind"] == "gtin" else sku_index
+            key = (code_entry["kind"], code_entry["code"])
+            # SpoolmanDB can give several sizes of a colour (1, 3 and 5 kg;
+            # 1.75 and 2.85 mm) the same code. Keep the likeliest box rather
+            # than whichever entry came last: 1.75 mm first, then 1 kg. Ties
+            # keep the first one seen.
+            if key in ranks and ranks[key] >= rank:
+                continue
+            ranks[key] = rank
             index[code_entry["code"]] = entry
     return gtin_index, sku_index
 
@@ -422,11 +523,13 @@ def get_materials() -> list:
     return _MATERIALS
 
 
-def lookup(barcode: str) -> tuple | None:
+def lookup(barcode: str, strict: bool = False) -> tuple | None:
     """Resolve a GTIN barcode: (fields, all_codes) for its colour, or None if not found."""
     try:
         idx = get_gtin_index()
     except Exception:
+        if strict:
+            raise
         return None
     entry = idx.get(_canon(barcode))
     if not entry:
@@ -434,11 +537,13 @@ def lookup(barcode: str) -> tuple | None:
     return entry["fields"], entry["all_codes"]
 
 
-def lookup_sku(code: str) -> tuple | None:
+def lookup_sku(code: str, strict: bool = False) -> tuple | None:
     """Resolve a manufacturer SKU the same way `lookup` resolves a GTIN."""
     try:
         idx = get_sku_index()
     except Exception:
+        if strict:
+            raise
         return None
     entry = idx.get((code or "").strip().upper())
     if not entry:

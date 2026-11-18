@@ -72,6 +72,8 @@
     background:var(--tertiary);color:var(--muted);margin-left:6px;vertical-align:middle}
   .badge.cache{background:#0c4a2a;color:var(--green-light)}
   .badge.upc{background:#0b3a66;color:#9cd2ff}
+  .badge.err{background:#5a1d14;color:#ffb4a6}
+  .swatch-preview{height:14px;border-radius:7px;border:1px solid #4a4a4a;margin-top:6px}
   .toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);
     padding:12px 18px;border-radius:10px;font-weight:600;max-width:90%;text-align:center;
     box-shadow:0 6px 24px rgba(0,0,0,.4);z-index:20}
@@ -162,11 +164,22 @@
       <div><label>{{ t('form.subtype') }}</label><select id="subtype"></select></div>
     </div>
 
+    <div data-field="effect_type">
+      <label>{{ t('form.effect') }}</label>
+      <select id="effect_type"></select>
+    </div>
+
     <div class="row">
       <div><label>{{ t('form.color_name') }}</label><input id="color_name" list="colorList" autocomplete="off"></div>
       <div><label>{{ t('form.color') }}</label><input id="color_picker" type="color" class="swatch" value="#00ae42"></div>
     </div>
     <datalist id="colorList"></datalist>
+
+    <div data-field="extra_colors">
+      <label>{{ t('form.extra_colors') }}</label>
+      <input id="extra_colors" autocomplete="off" spellcheck="false" placeholder="{{ t('form.extra_colors_placeholder') }}">
+      <div id="swatchPreview" class="swatch-preview hidden"></div>
+    </div>
 
     <div class="row">
       <div><label>{{ t('form.net_weight') }}</label><select id="label_weight"></select></div>
@@ -175,14 +188,15 @@
 
     <div class="row">
       <div><label>{{ t('form.storage_location') }}</label><select id="storage_location"></select></div>
-      <div><label>{{ t('form.category') }}</label><input id="category" placeholder="{{ t('form.optional_placeholder') }}"></div>
+      <div data-field="category"><label>{{ t('form.category') }}</label><input id="category" placeholder="{{ t('form.optional_placeholder') }}"></div>
     </div>
 
     <div class="row">
-      <div><label>{{ t('form.nozzle_min') }}</label><input id="nozzle_temp_min" inputmode="numeric"></div>
-      <div><label>{{ t('form.nozzle_max') }}</label><input id="nozzle_temp_max" inputmode="numeric"></div>
+      <div data-field="nozzle_temp_min"><label>{{ t('form.nozzle_min') }}</label><input id="nozzle_temp_min" inputmode="numeric"></div>
+      <div data-field="nozzle_temp_max"><label>{{ t('form.nozzle_max') }}</label><input id="nozzle_temp_max" inputmode="numeric"></div>
       <div><label>{{ t('form.cost_per_kg') }}</label><input id="cost_per_kg" inputmode="decimal"></div>
     </div>
+    <div id="spoolmanHint" class="hint hidden">{{ t('form.spoolman_hint') }}</div>
 
     <label>{{ t('form.note') }}</label>
     <textarea id="note" rows="2" placeholder="{{ t('form.optional_placeholder') }}"></textarea>
@@ -314,16 +328,48 @@ function setSelect(id, value){
 }
 async function loadOptions(){
   try{ OPTS = await (await fetch('/api/options')).json(); }
-  catch(e){ OPTS = {materials:[],subtypes:[],weights:[1000],colors:[],brands:[],locations:[]}; }
+  catch(e){ OPTS = {materials:[],subtypes:[],effects:[],weights:[1000],colors:[],brands:[],locations:[],hidden_fields:[]}; }
   fillSelect('material', OPTS.materials, {blank:true});
   fillSelect('brand', OPTS.brands, {blank:true});
   fillSelect('subtype', OPTS.subtypes, {blank:true});
+  // Bambuddy's effect_type values, labelled the way Bambuddy labels them.
+  const eff=$('effect_type'); eff.innerHTML='';
+  [''].concat(OPTS.effects||[]).forEach(v=>{
+    const op=document.createElement('option'); op.value=v; op.textContent=effectLabel(v); eff.appendChild(op);
+  });
+  // Bambuddy in Spoolman mode has nowhere to keep some fields; hide them.
+  const hidden = new Set(OPTS.hidden_fields||[]);
+  document.querySelectorAll('[data-field]').forEach(el=>el.classList.toggle('hidden', hidden.has(el.dataset.field)));
+  $('spoolmanHint').classList.toggle('hidden', OPTS.inventory!=='spoolman');
   fillSelect('label_weight', OPTS.weights.map(String));
   fillSelect('storage_location', OPTS.locations, {blank:true});
   fillDatalist('colorList', OPTS.colors);
   setSelect('label_weight','1000');
 }
 loadOptions();
+
+// "dual-color" → t('effect.dualColor'), Bambuddy's own key naming.
+function effectLabel(value){
+  const key = value ? value.replace(/-([a-z])/g, (_,c)=>c.toUpperCase()) : 'none';
+  return t('effect.'+key);
+}
+
+// ── Extra colours (dual/tri-colour rolls) ──
+// Bambuddy's extra_colors: comma-separated 6/8-char hex stops. With stops
+// set, Bambuddy draws the swatch as a gradient across them and ignores the
+// main colour, so the preview does the same.
+function parseStops(value){
+  return (value||'').split(',').map(s=>s.trim().replace(/^#/,'')).filter(s=>/^[0-9A-Fa-f]{6}([0-9A-Fa-f]{2})?$/.test(s));
+}
+function updateSwatchPreview(){
+  const stops = parseStops($('extra_colors').value);
+  const el = $('swatchPreview');
+  if(!stops.length){ el.classList.add('hidden'); return; }
+  const css = stops.map(h=>'#'+h.substring(0,6));
+  el.style.background = 'linear-gradient(90deg,'+(css.length===1?[css[0],css[0]]:css).join(',')+')';
+  el.classList.remove('hidden');
+}
+$('extra_colors').addEventListener('input', updateSwatchPreview);
 
 // Force-refresh the Open Filament Database + SpoolmanDB-Community.
 $('refreshDb').onclick = async () => {
@@ -443,6 +489,35 @@ function expandUpcEToUpcA(upce){
   }
   return ns+body+checkDigit;
 }
+// Amazon's FNSKU stock sticker ("X00…"): on many boxes, in no filament database.
+function isAmazonStockCode(value){ return /^X0[0-9A-Z]{8}$/i.test((value||'').trim()); }
+// Turn one ZXing result into a code worth looking up, or null for a misread.
+function codeFromResult(result){
+  const F = ZXingBrowser.BarcodeFormat;
+  const text = (result.getText()||'').trim();
+  const format = result.getBarcodeFormat();
+  if(F && format === F.CODE_128){
+    // Code 128 has its own symbology-level checksum and start/stop pattern,
+    // so a successful decode is already trustworthy — it's typically a
+    // manufacturer SKU/article number, not a GTIN. Only a light sanity check.
+    return isPlausibleSku(text) ? text : null;
+  }
+  if(F && format === F.UPC_E){
+    // ZXing decodes UPC-E to its own compressed 8-digit form, which does
+    // not validate against the standard EAN-8 checksum — expand to the
+    // equivalent UPC-A form first (see expandUpcEToUpcA).
+    const expanded = expandUpcEToUpcA(text);
+    return expanded && isValidUpcEanBarcode(expanded) ? expanded : null;
+  }
+  // A QR code might not be a GS1 Digital Link at all, and a corrupted read
+  // can surface a bad check digit — validate before treating it as a code.
+  const candidate = extractGtinFromScan(text);
+  return candidate && isValidUpcEanBarcode(candidate) ? candidate : null;
+}
+function scanFormats(){
+  const F = ZXingBrowser.BarcodeFormat;
+  return [F.UPC_A, F.UPC_E, F.EAN_13, F.EAN_8, F.QR_CODE, F.CODE_128];
+}
 function setScanHint(msg, isErr){
   $('scanHint').textContent = msg;
   $('scanHint').classList.toggle('err', !!isErr);
@@ -478,40 +553,21 @@ $('startBtn').onclick = async () => {
       reader.hints.set(3, true);
       // possibleFormats' setter re-applies the whole hints map (including
       // TRY_HARDER above) to the underlying reader, so order matters here.
-      reader.possibleFormats = [F.UPC_A, F.UPC_E, F.EAN_13, F.EAN_8, F.QR_CODE, F.CODE_128];
+      reader.possibleFormats = scanFormats();
     }
     $('videoWrap').classList.remove('hidden'); $('startBtn').classList.add('hidden');
     $('stopBtn').classList.remove('hidden'); setScanHint(t('scan.align_barcode'));
     await reader.decodeFromVideoDevice(undefined, $('video'), (result, err) => {
       if(!result) return;
-      if(ZXingBrowser.BarcodeFormat && result.getBarcodeFormat() === ZXingBrowser.BarcodeFormat.CODE_128){
-        // Code 128 has its own symbology-level checksum and start/stop
-        // pattern, so a successful decode is already trustworthy — unlike a
-        // bare guessed digit string, it doesn't need a GTIN-style checksum
-        // (it's typically not even a GTIN, but a manufacturer SKU/article
-        // number). Only a light sanity check is applied.
-        const text = (result.getText()||'').trim();
-        if(!isPlausibleSku(text)) return;
-        stopScan(); onBarcode(text);
+      // An invalid read is silently ignored so the scan loop keeps looking.
+      const code = codeFromResult(result);
+      if(!code) return;
+      if(isAmazonStockCode(code)){
+        // Amazon's stock sticker: keep the camera on for the box's own barcode.
+        setScanHint(t('scan.fnsku_skipped'), true);
         return;
       }
-      if(ZXingBrowser.BarcodeFormat && result.getBarcodeFormat() === ZXingBrowser.BarcodeFormat.UPC_E){
-        // ZXing decodes UPC-E to its own compressed 8-digit form, which does
-        // not validate against the standard EAN-8 checksum — expand to the
-        // equivalent UPC-A form first (see expandUpcEToUpcA).
-        const expanded = expandUpcEToUpcA(result.getText());
-        if(!expanded || !isValidUpcEanBarcode(expanded)) return;
-        stopScan(); onBarcode(expanded);
-        return;
-      }
-      const candidate = extractGtinFromScan(result.getText());
-      // Defense-in-depth: even within the restricted formats above, a
-      // corrupted read can still surface a bad check digit, and a QR code
-      // might not be a GS1 Digital Link at all — validate before treating
-      // it as a real barcode. An invalid read is silently ignored so the
-      // scan loop just keeps looking.
-      if(!candidate || !isValidUpcEanBarcode(candidate)) return;
-      stopScan(); onBarcode(candidate);
+      stopScan(); onBarcode(code);
     });
   }catch(e){ setScanHint(t('scan.camera_error',{error:e}), true); stopScan(); }
 };
@@ -549,8 +605,8 @@ async function onBarcode(barcode){
   setScanHint(t('scan.looking_up',{barcode}));
   try{
     const d = await (await fetch('/api/lookup?barcode='+encodeURIComponent(barcode))).json();
-    fillForm(d);
     setScanHint('');
+    fillForm(d);
   }catch(e){ toast(t('scan.lookup_failed'), false); }
 }
 
@@ -566,6 +622,8 @@ function applyFields(f){
   if(f.material!=null) setSelect('material', f.material);
   if(f.brand!=null) setSelect('brand', f.brand);
   if(f.subtype!=null) setSelect('subtype', f.subtype);
+  if(f.effect_type!=null) setSelect('effect_type', f.effect_type);
+  if(f.extra_colors!=null){ $('extra_colors').value = f.extra_colors; updateSwatchPreview(); }
   if(f.color_name!=null) $('color_name').value = f.color_name;
   if(f.rgba){ const c=hexToColorInput(f.rgba); if(c) $('color_picker').value=c; }
   if(f.label_weight!=null) setSelect('label_weight', f.label_weight);
@@ -586,7 +644,8 @@ function badgeFor(source){
     ofd:    [t('badge.ofd'), 'cache'],
     'spoolmandb-community': [t('badge.smdb'), 'cache'],
     label:  [t('badge.label'), 'upc'],
-    amazon: [t('badge.amazon'), ''],
+    fnsku:  [t('badge.fnsku'), 'err'],
+    error:  [t('badge.error'), 'err'],
     none:   [t('badge.none'), ''],
   };
   return BADGE[source] || BADGE.none;
@@ -614,11 +673,15 @@ function fillForm(d){
   // 'Forget' only makes sense for a remembered (cache) entry with a barcode.
   $('forgetBtn').classList.toggle('hidden', !(code && d.source==='cache'));
   // reset then apply
-  ['color_name','category','nozzle_temp_min','nozzle_temp_max',
+  ['color_name','extra_colors','category','nozzle_temp_min','nozzle_temp_max',
    'cost_per_kg','note','paste_title'].forEach(id=>$(id).value='');
-  setSelect('material',''); setSelect('brand',''); setSelect('subtype',''); setSelect('storage_location','');
+  updateSwatchPreview();
+  setSelect('material',''); setSelect('brand',''); setSelect('subtype',''); setSelect('effect_type','');
+  setSelect('storage_location','');
   setSelect('label_weight','1000'); $('quantity').value=1;
   applyFields(f);
+  if(d.source==='error') setScanHint(t('scan.lookup_unavailable'), true);
+  else if(d.source==='fnsku') setScanHint(t('scan.fnsku_skipped'), true);
   $('material').focus();
 }
 
@@ -678,7 +741,9 @@ async function ocrBestOrientation(file){
       currentDeg=deg;
       const canvas=rotatedCanvas(img, deg, 1600);
       const { data } = await worker.recognize(canvas);
-      const text=(data.text||'').replace(/\s+/g,' ').trim();
+      // Keep the line breaks: a "SKU" heading with its value on the next
+      // line, a "COLOR:" field and a "(GREY-ORANGE)" pair are read by line.
+      const text=(data.text||'').split(/\n/).map(l=>l.replace(/\s+/g,' ').trim()).filter(Boolean).join('\n');
       const score=scoreText(text);
       if(score>best.score) best={text,score};
       if(score>=120) break;   // strong result — no need to try more rotations
@@ -689,6 +754,40 @@ async function ocrBestOrientation(file){
   }
 }
 
+// Every barcode in a still photo — the box's EAN, a QR code carrying it, a
+// Code 128 SKU. ZXing finds one per decode, so it's run over the whole photo,
+// then each half and quarter, upright and turned 90° (linear barcodes only
+// read across their bars).
+function cropCanvas(src, x, y, w, h){
+  const c=document.createElement('canvas'); c.width=w; c.height=h;
+  c.getContext('2d').drawImage(src, x, y, w, h, 0, 0, w, h);
+  return c;
+}
+async function decodeBarcodesInPhoto(img){
+  if(!window.ZXingBrowser) return [];
+  const found = [];
+  try{
+    const r = new ZXingBrowser.BrowserMultiFormatReader();
+    if(ZXingBrowser.BarcodeFormat){ r.hints.set(3, true); r.possibleFormats = scanFormats(); }
+    for(const deg of [0,90]){
+      const full = rotatedCanvas(img, deg, 1400);
+      const W=full.width, H=full.height, hw=Math.round(W/2), hh=Math.round(H/2);
+      const regions = [[0,0,W,H],[0,0,W,hh],[0,hh,W,H-hh],[0,0,hw,H],[hw,0,W-hw,H],
+                       [0,0,hw,hh],[hw,0,W-hw,hh],[0,hh,hw,H-hh],[hw,hh,W-hw,H-hh]];
+      for(const [x,y,w,h] of regions){
+        let result = null;
+        try{ result = r.decodeFromCanvas(cropCanvas(full,x,y,w,h)); }catch(e){ /* nothing here */ }
+        if(!result) continue;
+        const code = codeFromResult(result);
+        if(code && !found.includes(code)) found.push(code);
+      }
+      // Let the hint update between passes.
+      await new Promise(res=>setTimeout(res,0));
+    }
+  }catch(e){ /* barcode decoding is a bonus; the text still gets read */ }
+  return found;
+}
+
 $('ocrBtn').onclick = () => $('labelPhoto').click();
 $('labelPhoto').onchange = async (e) => {
   const file = e.target.files[0]; if(!file) return;
@@ -697,10 +796,13 @@ $('labelPhoto').onchange = async (e) => {
       $('ocrHint').textContent=t('ocr.loading_recognizer');
       await loadScript('/static/tesseract/tesseract.min.js');
     }
+    $('ocrHint').textContent=t('ocr.reading_barcodes');
+    const barcodes = await decodeBarcodesInPhoto(await loadImage(file));
     $('ocrHint').textContent=t('ocr.reading_label');
     const text = await ocrBestOrientation(file);
-    if(!text){ $('ocrHint').textContent=t('ocr.no_text_found'); return; }
-    const d = await (await fetch('/api/parse?title='+encodeURIComponent(text))).json();
+    if(!text && !barcodes.length){ $('ocrHint').textContent=t('ocr.no_text_found'); return; }
+    const d = await (await fetch('/api/parse', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({text, barcodes})})).json();
     if(d.barcode) currentBarcode = d.barcode;   // remember by the label's barcode
     const fields = Object.assign({label_weight:1000}, d.fields||{});
     // Did OCR yield anything beyond the default weight?
@@ -711,7 +813,7 @@ $('labelPhoto').onchange = async (e) => {
                title: dbSource ? (d.title||'') : '',  // never dump raw OCR text
                linked_codes: dbSource ? (d.linked_codes||[]) : [],
                fields });
-    $('ocrHint').textContent = got ? '' : t('ocr.couldnt_read');
+    $('ocrHint').textContent = d.lookup_error ? t('scan.lookup_unavailable') : (got ? '' : t('ocr.couldnt_read'));
   }catch(err){ $('ocrHint').textContent=t('ocr.failed',{error:err}); }
   finally{ e.target.value=''; }
 };
@@ -742,6 +844,8 @@ $('form').onsubmit = async (e) => {
     material: $('material').value.trim(),
     brand: $('brand').value.trim(),
     subtype: $('subtype').value.trim(),
+    effect_type: $('effect_type').value,
+    extra_colors: parseStops($('extra_colors').value).join(','),
     color_name: $('color_name').value.trim(),
     rgba: colorInputToRgba($('color_picker').value),
     label_weight: $('label_weight').value.trim(),

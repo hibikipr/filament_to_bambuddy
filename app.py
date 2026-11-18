@@ -26,6 +26,7 @@ if sys.version_info < (3, 10):  # noqa: UP036 - guards direct `python app.py` ru
 import json
 import logging
 import os
+import re
 import subprocess
 from pathlib import Path
 
@@ -33,6 +34,7 @@ import requests
 from flask import Flask, jsonify, make_response, render_template, request
 
 import i18n
+import label_reader
 
 logging.basicConfig(
     level=logging.INFO,
@@ -100,6 +102,33 @@ def _classify_code(raw: str) -> tuple[str, str]:
     return (raw or "").strip().upper(), "sku"
 
 
+class LookupUnavailable(Exception):
+    """Neither OFD nor SpoolmanDB-Community could be checked (index download
+    failed with nothing cached). Distinct from a plain miss, which means both
+    were checked and neither knows the code."""
+
+
+def _finish_fields(fields: dict) -> dict:
+    """Bring merged database fields in line with what Bambuddy stores.
+
+    Material as Bambuddy's list spells it ("Nylon" → "PA"), an effect_type
+    Bambuddy accepts, and — when the database didn't give one — the effect the
+    product line or colour name implies ("Dual Matte PLA", "Galaxy Black").
+    """
+    if fields.get("material"):
+        fields["material"] = label_reader.canonical_material(fields["material"])
+    effect = label_reader.normalize_effect(fields.get("effect_type"))
+    if not effect:
+        effect = label_reader.effect(" ".join(
+            str(fields[k]) for k in ("subtype", "color_name") if fields.get(k)))
+    fields["effect_type"] = effect
+    if not fields.get("extra_colors"):
+        fields.pop("extra_colors", None)
+    if fields.get("effect_type") is None:
+        fields.pop("effect_type", None)
+    return fields
+
+
 def _external_all_codes(code: str, kind: str) -> tuple | None:
     """Cross-reference OFD and SpoolmanDB-Community for `code`, merging both hits.
 
@@ -111,26 +140,36 @@ def _external_all_codes(code: str, kind: str) -> tuple | None:
     one database resolves `code` directly, its sibling codes are also probed
     against the *other* database to recover cross-referenced fields/codes.
     Mirrors Bambuddy's `_external_all_codes` in `backend/app/api/routes/inventory.py`.
+
+    Returns None when both databases were checked and neither knows the code;
+    raises LookupUnavailable when neither could be checked at all.
     """
     import ofd
     import spoolmandb_community
 
     def _ofd_lookup(c, k):
-        return ofd.lookup(c) if k == "gtin" else ofd.lookup_article(c)
+        return ofd.lookup(c, strict=True) if k == "gtin" else ofd.lookup_article(c, strict=True)
 
     def _smdb_lookup(c, k):
-        return spoolmandb_community.lookup(c) if k == "gtin" else spoolmandb_community.lookup_sku(c)
+        if k == "gtin":
+            return spoolmandb_community.lookup(c, strict=True)
+        return spoolmandb_community.lookup_sku(c, strict=True)
 
+    ofd_failed = smdb_failed = False
     try:
         ofd_hit = _ofd_lookup(code, kind)
     except Exception:
-        ofd_hit = None
+        log.warning("OFD lookup couldn't run for %s", code, exc_info=True)
+        ofd_hit, ofd_failed = None, True
     try:
         smdb_hit = _smdb_lookup(code, kind)
     except Exception:
-        smdb_hit = None
+        log.warning("SpoolmanDB-Community lookup couldn't run for %s", code, exc_info=True)
+        smdb_hit, smdb_failed = None, True
 
     if not ofd_hit and not smdb_hit:
+        if ofd_failed and smdb_failed:
+            raise LookupUnavailable(code)
         return None
 
     fields: dict = {}
@@ -188,7 +227,7 @@ def _external_all_codes(code: str, kind: str) -> tuple | None:
                 _merge(probe, "spoolmandb-community")
                 smdb_hit = probe
 
-    return fields, source, all_codes, title
+    return _finish_fields(fields), source, all_codes, title
 
 
 def _get_version() -> str:
@@ -299,13 +338,18 @@ def manifest():
     return resp
 
 
-# Dropdown option lists (mirroring Bambuddy's spool edit form).
-MATERIAL_OPTIONS = ["PLA", "PETG", "PCTG", "ABS", "ASA", "TPU", "TPE", "PC", "PA",
-                    "Nylon", "PVA", "HIPS", "PP", "PET", "PLA-CF", "PETG-CF", "PA-CF"]
-SUBTYPE_OPTIONS = ["Basic", "Matte", "Silk", "Silk+", "Plus", "Tough", "HF",
-                   "High Speed", "CF", "GF", "Galaxy", "Glow", "Marble", "Metal",
-                   "Rainbow", "Sparkle", "Wood", "Translucent", "Transparent",
-                   "Clear", "Gradient", "Dual Color", "Tri Color", "Carbon Fiber"]
+# Dropdown option lists (mirroring Bambuddy's spool edit form). Materials are
+# Bambuddy's MATERIALS, spelled its way (nylon is "PA"), plus a few common ones
+# it doesn't list.
+MATERIAL_OPTIONS = label_reader.BAMBUDDY_MATERIALS + ["PCTG", "TPE", "PP", "PET"]
+# Subtype is the product line only. Finishes (Silk, Matte, Glow, Dual Color…)
+# are the separate Effect field, Bambuddy's effect_type — this is Bambuddy's
+# KNOWN_VARIANTS without them.
+SUBTYPE_OPTIONS = ["Basic", "Silk+", "Plus", "Tough", "Tough+", "HF", "High Flow",
+                   "High Speed", "Engineering", "CF", "GF", "Lite", "Pro", "Max",
+                   "Super", "Ultra", "Flex", "Soft", "Hard", "Strong", "Impact",
+                   "Heat Resistant", "UV Resistant", "ESD", "Conductive", "Magnetic"]
+EFFECT_OPTIONS = [value for value, _ in label_reader.EFFECT_OPTIONS]
 WEIGHT_OPTIONS = [250, 500, 750, 1000, 2000, 3000]
 COLOR_OPTIONS = ["Black", "White", "Gray", "Silver", "Red", "Orange", "Yellow",
                  "Green", "Blue", "Navy", "Cyan", "Teal", "Purple", "Pink",
@@ -313,6 +357,66 @@ COLOR_OPTIONS = ["Black", "White", "Gray", "Silver", "Red", "Orange", "Yellow",
                  "Natural", "Clear", "Transparent"]
 DEFAULT_BRANDS = ["Bambu Lab", "Polymaker", "eSUN", "Overture", "SUNLU", "Inland",
                   "Hatchbox", "Prusament", "Creality", "Generic"]
+
+
+# ── Bambuddy inventory backend (built-in or Spoolman) ─────────────────────────
+
+INVENTORY_BUILTIN = "builtin"
+INVENTORY_SPOOLMAN = "spoolman"
+_INVENTORY_BASE = {
+    INVENTORY_BUILTIN: "/api/v1/inventory",
+    INVENTORY_SPOOLMAN: "/api/v1/spoolman/inventory",
+}
+# Spool fields Bambuddy's Spoolman proxy (SpoolmanInventoryCreate) has no
+# place for. Sent anyway they'd be silently dropped, so they're left out and
+# the form hides them in that mode.
+SPOOLMAN_UNSUPPORTED_FIELDS = {
+    "extra_colors", "effect_type", "nozzle_temp_min", "nozzle_temp_max",
+    "category", "data_origin",
+}
+# The last mode Bambuddy answered with, kept so a network blip doesn't switch
+# a Spoolman user back to the built-in inventory.
+_last_inventory_backend = INVENTORY_BUILTIN
+
+
+def _inventory_backend() -> str:
+    """Which inventory Bambuddy is serving: its own, or Spoolman through its proxy.
+
+    Asks /spoolman/status (needs `filaments:read`). An API key without that
+    (401/403) falls back to whether the Spoolman inventory proxy answers,
+    which needs only inventory access and replies 400 "not enabled" in
+    built-in mode. Checked on every add, health check and form load, so
+    flipping Bambuddy's Spoolman switch is followed without a restart. Same
+    detection as NozzleCast's BambuddyAPIClient.inventoryBackend().
+    """
+    global _last_inventory_backend
+    headers = {"X-API-Key": BAMBUDDY_API_KEY, "Accept": "application/json"}
+    try:
+        r = requests.get(f"{BAMBUDDY_URL}/api/v1/spoolman/status", headers=headers, timeout=10)
+        if r.ok:
+            enabled = bool((r.json() or {}).get("enabled"))
+            mode = INVENTORY_SPOOLMAN if enabled else INVENTORY_BUILTIN
+        elif r.status_code in (401, 403):
+            probe = requests.get(f"{BAMBUDDY_URL}/api/v1/spoolman/inventory/spools",
+                                 headers=headers, params={"limit": 1}, timeout=10)
+            if probe.ok:
+                mode = INVENTORY_SPOOLMAN
+            elif probe.status_code < 500:
+                mode = INVENTORY_BUILTIN
+            else:
+                return _last_inventory_backend
+        elif r.status_code < 500:
+            # Older Bambuddy without the route, or another 4xx: built-in.
+            mode = INVENTORY_BUILTIN
+        else:
+            return _last_inventory_backend
+    except Exception:
+        log.debug("inventory backend detection failed; keeping %s", _last_inventory_backend, exc_info=True)
+        return _last_inventory_backend
+    if mode != _last_inventory_backend:
+        log.info("Bambuddy inventory: %s", mode)
+    _last_inventory_backend = mode
+    return mode
 
 
 def _bambuddy_locations() -> list[str]:
@@ -344,7 +448,10 @@ def options():
         brands = DEFAULT_BRANDS
     try:
         materials = sorted(
-            set(MATERIAL_OPTIONS) | {m["material"] for m in spoolmandb_community.get_materials() if m.get("material")},
+            set(MATERIAL_OPTIONS) | {
+                label_reader.canonical_material(m["material"])
+                for m in spoolmandb_community.get_materials() if m.get("material")
+            },
             key=str.lower,
         )
     except Exception:
@@ -354,9 +461,12 @@ def options():
     # (~23 entries), while SpoolmanDB's colors are thousands of specific
     # product names on a different axis (already covered by the free-text
     # color_name field, not a constrained dropdown).
-    return jsonify(materials=materials, subtypes=SUBTYPE_OPTIONS,
+    inventory = _inventory_backend() if BAMBUDDY_API_KEY else INVENTORY_BUILTIN
+    return jsonify(materials=materials, subtypes=SUBTYPE_OPTIONS, effects=EFFECT_OPTIONS,
                    weights=WEIGHT_OPTIONS, colors=COLOR_OPTIONS, brands=brands,
-                   locations=_bambuddy_locations())
+                   locations=_bambuddy_locations(), inventory=inventory,
+                   hidden_fields=sorted(SPOOLMAN_UNSUPPORTED_FIELDS - {"data_origin"})
+                   if inventory == INVENTORY_SPOOLMAN else [])
 
 
 @app.delete("/api/cache")
@@ -434,10 +544,13 @@ def health():
         return jsonify(ok=False, bambuddy=BAMBUDDY_URL,
                        error="BAMBUDDY_API_KEY not set — start with ./run.sh"), 200
     headers = {"X-API-Key": BAMBUDDY_API_KEY, "Accept": "application/json"}
-    # Probe the endpoint we actually use (inventory), so the key is checked
-    # against the permission this app needs.
+    # Probe the endpoint we actually use (inventory — Bambuddy's own, or its
+    # Spoolman proxy when it tracks filament in Spoolman, where the built-in
+    # route stops answering), so the key is checked against the permission
+    # this app needs.
+    inventory = _inventory_backend()
     try:
-        r = requests.get(f"{BAMBUDDY_URL}/api/v1/inventory/spools",
+        r = requests.get(f"{BAMBUDDY_URL}{_INVENTORY_BASE[inventory]}/spools",
                          headers=headers, params={"limit": 1}, timeout=10)
     except requests.exceptions.SSLError:
         log.warning("bambuddy health check: TLS error contacting %s", BAMBUDDY_URL, exc_info=True)
@@ -451,7 +564,7 @@ def health():
                        error=f"{type(e).__name__} — see server logs"), 200
 
     if r.ok:
-        return jsonify(ok=True, bambuddy=BAMBUDDY_URL, status=r.status_code)
+        return jsonify(ok=True, bambuddy=BAMBUDDY_URL, status=r.status_code, inventory=inventory)
     if r.status_code == 401:
         return jsonify(ok=False, level="error", bambuddy=BAMBUDDY_URL,
                        error="API key rejected (HTTP 401) — wrong or revoked key"), 200
@@ -485,6 +598,13 @@ def lookup():
 
     code, kind = _classify_code(barcode)
 
+    # An Amazon FNSKU sticker ("X00…") is a stock code no filament database
+    # knows; don't look it up, ask for the box's other barcode instead.
+    if label_reader.is_amazon_stock_code(barcode):
+        log.info("lookup %s: Amazon FNSKU, skipped", barcode)
+        return jsonify(barcode=code, source="fnsku",
+                       fields={"label_weight": DEFAULT_LABEL_WEIGHT}, title=None, linked_codes=[])
+
     # 1. Personal cache — your own confirmed entries win. Checked under both
     # the canonicalized code and the raw scanned/typed string, so cache
     # entries written before this rework (keyed by the un-canonicalized
@@ -498,7 +618,14 @@ def lookup():
         return jsonify(barcode=code, source="cache", fields=cache_hit, title=None, linked_codes=[])
 
     # 2. Cross-referenced OFD + SpoolmanDB-Community lookup.
-    external = _external_all_codes(code, kind)
+    try:
+        external = _external_all_codes(code, kind)
+    except LookupUnavailable:
+        # Couldn't check, which is not the same as "not found": say so, so a
+        # failed index download doesn't read as an unknown filament.
+        log.warning("lookup %s: databases unavailable", barcode)
+        return jsonify(barcode=code, source="error", lookup_error=True,
+                       fields={"label_weight": DEFAULT_LABEL_WEIGHT}, title=None, linked_codes=[])
     if external:
         fields, source, all_codes, title = external
         clean_fields = {k: v for k, v in fields.items() if not k.startswith("_")}
@@ -508,68 +635,110 @@ def lookup():
         return jsonify(barcode=code, source=source, title=title, fields=clean_fields, linked_codes=linked_codes)
 
     # 3. Not found — fill in manually (and it'll be remembered).
-    src = "amazon" if kind == "sku" else "none"
-    log.info("lookup %s: not found (source=%s)", barcode, src)
-    return jsonify(barcode=code, source=src,
+    log.info("lookup %s: not found", barcode)
+    return jsonify(barcode=code, source="none",
                    fields={"label_weight": DEFAULT_LABEL_WEIGHT}, title=None, linked_codes=[])
 
 
 def _extract_barcode(text: str) -> str | None:
-    """Pull a barcode (UPC/EAN/GTIN) out of free text, e.g. label OCR.
-
-    Prefers a labelled number ("EAN: 6938936716785"); falls back to any bare
-    12–14 digit run. Returns digits only, or None.
-    """
-    import re
-    # The separator between the label and the digits is wrapped in an atomic
-    # group: without it, its optional \s* overlaps with the [\d\s] class right
-    # after it, and a long run of spaces with no trailing digit makes the
-    # regex engine try every possible split between the two — O(n^2) blowup
-    # (confirmed: 50k spaces took ~24s before, ~3ms after).
-    m = re.search(r"(?:EAN|UPC|GTIN|BARCODE)(?>\s*[:#]?\s*)(\d[\d\s]{6,16}\d)", text, re.IGNORECASE)
-    cand = re.sub(r"\D", "", m.group(1)) if m else None
-    if not cand:
-        m = re.search(r"(?<!\d)(\d{12,14})(?!\d)", text)
-        cand = m.group(1) if m else None
-    return cand if cand and 8 <= len(cand) <= 14 else None
+    """Pull a printed barcode (UPC/EAN/GTIN) out of free text — see label_reader.extract_barcode."""
+    return label_reader.extract_barcode(text)
 
 
-@app.get("/api/parse")
+# A label photo's OCR text is a few hundred characters; this bounds what a
+# request can make the parser chew on.
+_MAX_PARSE_TEXT = 20_000
+_MAX_PARSE_BARCODES = 20
+
+
+@app.route("/api/parse", methods=["GET", "POST"])
 def parse_endpoint():
-    """Parse free text (pasted title or label OCR) into filament fields.
+    """Parse free text (a pasted title, or a label photo) into filament fields.
 
-    Heuristically parses the text, and if a barcode is present in it, looks
-    that barcode up (OFD, then SpoolmanDB-Community) — authoritative data
-    overrides the guesses when found.
+    GET ?title=… takes a pasted product title. POST {"text": …, "barcodes": […]}
+    takes a label photo: its OCR text, line breaks kept, and every barcode
+    decoded from the image itself.
+
+    The text is parsed heuristically, then every code on the label is looked
+    up in order (decoded GTINs, the printed EAN/UPC, other barcodes, the value
+    under a "SKU" heading, other SKU-shaped tokens; Amazon FNSKU stickers
+    skipped) and the first database hit wins. The label still fills what the
+    database leaves out — its finish, a dual-colour roll's colours — and its
+    printed weight beats the database's, since one code can cover several
+    sizes. Same order as NozzleCast's FilamentLookupService.analyze.
     """
     import ofd
     from filament_parse import parse_title
-    title = (request.args.get("title") or "").strip()
-    if not title:
+    if request.method == "POST":
+        body = request.get_json(force=True, silent=True) or {}
+        text = str(body.get("text") or "")[:_MAX_PARSE_TEXT].strip()
+        barcodes = [str(b)[:200] for b in (body.get("barcodes") or []) if isinstance(b, (str, int))]
+        barcodes = barcodes[:_MAX_PARSE_BARCODES]
+    else:
+        text = (request.args.get("title") or "")[:_MAX_PARSE_TEXT].strip()
+        barcodes = []
+    if not text and not barcodes:
         return jsonify(fields={})
     try:
         brands = ofd.get_brands()
     except Exception:
         brands = []
-    fields = parse_title(title, extra_brands=brands)
+    parsed = parse_title(text, extra_brands=brands) if text else {}
+    labelled = label_reader.label_color(text)
+    fields = dict(parsed)
 
-    source, out_title = "parsed", title
+    source, out_title = "parsed", text
     linked_codes: list = []
-    barcode = _extract_barcode(title)
-    resolved_code = barcode
-    if barcode:
-        code, kind = _classify_code(barcode)
-        external = _external_all_codes(code, kind)
-        if external:
-            ext_fields, ext_source, all_codes, ext_title = external
-            fields = {**fields, **{k: v for k, v in ext_fields.items() if not k.startswith("_") and v is not None}}
-            source = ext_source
-            out_title = ext_title or title
-            resolved_code = code
-            linked_codes = [c for c in all_codes if c["code"] != code]
+    resolved_code = None
+    lookup_error = False
+    for candidate in label_reader.code_candidates(text, barcodes, classify=_classify_code):
+        code, kind = _classify_code(candidate)
+        try:
+            external = _external_all_codes(code, kind)
+        except LookupUnavailable:
+            # Neither database could be reached; every other code would fail
+            # the same way.
+            lookup_error = True
+            break
+        if not external:
+            if resolved_code is None and kind == "gtin":
+                resolved_code = code
+            continue
+        ext_fields, ext_source, all_codes, ext_title = external
+        db = {k: v for k, v in ext_fields.items() if not k.startswith("_") and v is not None}
+        fields = {**fields, **db}
+        # The box's own printed weight wins: a database code can cover several sizes.
+        if parsed.get("label_weight"):
+            fields["label_weight"] = parsed["label_weight"]
+        # Keep the label's split-colour swatch when the database has none.
+        if "extra_colors" not in db and parsed.get("extra_colors") and \
+                fields.get("effect_type") in label_reader.MULTICOLOR_EFFECTS:
+            fields["extra_colors"] = parsed["extra_colors"]
+        elif "extra_colors" not in db:
+            fields.pop("extra_colors", None)
+        if "effect_type" not in db and parsed.get("effect_type"):
+            fields["effect_type"] = parsed["effect_type"]
+        # A database name that's product line + colour ("PolyLite PLA Pro
+        # Blue") when the label names the colour on its own ("COLOR: Blue"):
+        # the label's colour, and the rest as the product line.
+        if labelled["explicit"] and labelled["name"]:
+            split = label_reader.split_product_and_color(
+                db.get("color_name"), labelled["name"], fields.get("material"))
+            if split:
+                fields["color_name"] = split[0]
+                if not db.get("subtype") and split[1]:
+                    fields["subtype"] = split[1]
+        source = ext_source
+        out_title = ext_title or text
+        resolved_code = code
+        linked_codes = [c for c in all_codes if c["code"] != code]
+        break
 
+    if fields.get("material"):
+        fields["material"] = label_reader.canonical_material(fields["material"])
     fields.setdefault("label_weight", DEFAULT_LABEL_WEIGHT)
-    return jsonify(fields=fields, title=out_title, barcode=resolved_code, source=source, linked_codes=linked_codes)
+    return jsonify(fields=fields, title=out_title, barcode=resolved_code, source=source,
+                   linked_codes=linked_codes, lookup_error=lookup_error)
 
 
 @app.post("/api/spool")
@@ -602,17 +771,39 @@ def add_spool():
                 val = float(val)
             except (TypeError, ValueError):
                 continue
+        elif key == "effect_type":
+            val = label_reader.normalize_effect(val)
+            if val is None:
+                continue
+        elif key == "material":
+            val = label_reader.canonical_material(val)
+        elif key == "extra_colors":
+            # Bambuddy rejects the whole spool over one bad token, and takes
+            # at most 8 stops: keep the valid ones.
+            stops = [t.strip().lstrip("#") for t in str(val).split(",")]
+            stops = [t.upper() for t in stops if re.fullmatch(r"[0-9A-Fa-f]{6}(?:[0-9A-Fa-f]{2})?", t)][:8]
+            if not stops:
+                continue
+            val = ",".join(stops)
         payload[key] = val
     payload.setdefault("label_weight", DEFAULT_LABEL_WEIGHT)
     payload["data_origin"] = "barcode-scan"
+
+    # Bambuddy tracking filament in Spoolman: its built-in inventory route
+    # stops answering and spools go through the Spoolman proxy, which has no
+    # place for extra colours, the effect, nozzle temps or category.
+    inventory = _inventory_backend()
+    if inventory == INVENTORY_SPOOLMAN:
+        for key in SPOOLMAN_UNSUPPORTED_FIELDS:
+            payload.pop(key, None)
+    spools_url = f"{BAMBUDDY_URL}{_INVENTORY_BASE[inventory]}/spools"
 
     headers = {"X-API-Key": BAMBUDDY_API_KEY, "Content-Type": "application/json",
                "Accept": "application/json"}
     created, errors = 0, []
     for _ in range(quantity):
         try:
-            r = requests.post(f"{BAMBUDDY_URL}/api/v1/inventory/spools",
-                              json=payload, headers=headers, timeout=30)
+            r = requests.post(spools_url, json=payload, headers=headers, timeout=30)
             if r.status_code in (200, 201):
                 created += 1
             else:
@@ -635,7 +826,7 @@ def add_spool():
         cache[code] = remembered
         try:
             external = _external_all_codes(code, kind)
-        except Exception:
+        except Exception:  # incl. LookupUnavailable: just skip the siblings
             external = None
         if external:
             _, _, all_codes, _ = external
@@ -653,7 +844,7 @@ def add_spool():
     else:
         log.warning("spool add partial: %d/%d %s (barcode=%s) errors=%s",
                     created, quantity, label, barcode or "none", errors)
-    return jsonify(ok=ok, created=created, requested=quantity,
+    return jsonify(ok=ok, created=created, requested=quantity, inventory=inventory,
                    errors=errors, bambuddy=BAMBUDDY_URL), (200 if created else 502)
 
 

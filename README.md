@@ -16,9 +16,13 @@ It's a small mobile web app:
       cross-referenced against each other so a hit in one fills in fields the
       other is missing (e.g. print temps from one, colour from the other),
    3. otherwise a blank form, with a **paste-the-title** auto-fill helper.
-   Or skip the barcode entirely and **📷 photograph the label** — on-device OCR
-   reads the text and the same parser fills the form (works even over plain
-   HTTP, unlike the live barcode camera).
+   Or skip the barcode entirely and **📷 photograph the label**: every
+   barcode in the photo is decoded (including a QR code that carries the EAN),
+   on-device OCR reads the text, and every code on the label is tried in turn
+   (decoded barcodes, the printed EAN/UPC, the value under a "SKU" heading,
+   other SKU-like codes) until a database knows one. Amazon "X00…" stock
+   stickers are skipped. Works even over plain HTTP, unlike the live barcode
+   camera.
 3. **Review** the auto-filled details (correct anything). Any other codes
    discovered for the same product (other package-size barcodes, the refill
    barcode, the manufacturer SKU) are shown as "Also matches" — informational
@@ -30,7 +34,9 @@ The lookup also **learns**: whatever you confirm is remembered for that code
 them — the same barcode, a sibling package size, or the manufacturer SKU —
 auto-fills instantly next time. *(Scope: new, unopened spools still in the box.)*
 
-> **Tested with** Bambuddy v0.2.4.8. Requires **Python 3.10+**.
+> **Tested with** Bambuddy v0.2.4.8; the spool create payload (built-in
+> inventory and Spoolman mode) is checked against Bambuddy 1.3.1's schemas (main).
+> Requires **Python 3.10+**.
 
 ---
 
@@ -153,9 +159,26 @@ The Open Filament Database dump is downloaded once and cached in
 ## How it maps to Bambuddy
 
 Spools are created via `POST /api/v1/inventory/spools`. Only **`material`** is
-required; the form also sends brand, subtype, colour name + RGBA, net weight,
-storage location, category, nozzle temps, cost/kg and a note where available.
-Each created spool is tagged `data_origin = "barcode-scan"`.
+required; the form also sends brand, subtype (the product line), effect
+(Bambuddy's `effect_type`: Silk, Matte, Glow, Dual Color…), colour name + RGBA,
+extra colours for dual/tri-colour rolls, net weight, storage location,
+category, nozzle temps, cost/kg and a note where available. Each created spool
+is tagged `data_origin = "barcode-scan"`.
+
+Materials are spelled the way Bambuddy's list spells them: nylon is `PA`, and
+carbon-fibre PLA/PETG/PA is `PLA-CF`/`PETG-CF`/`PA-CF`. When one database code
+covers several spool sizes, the 1.75 mm, 1 kg one is picked, and a weight
+printed on a photographed label wins.
+
+**Spoolman mode.** When Bambuddy tracks filament in Spoolman, its built-in
+inventory route stops answering. The app asks Bambuddy which mode it is in
+(`/api/v1/spoolman/status`, or a probe of the Spoolman proxy if the key lacks
+`filaments:read`) on every add, and posts to `/api/v1/spoolman/inventory/spools`
+instead. Spoolman has no place for the effect, extra colours, nozzle temps or
+category, so the form hides those in that mode.
+
+If neither filament database could be reached (no network and nothing
+cached), the form says the lookup failed rather than "not in database".
 
 ## Project layout
 
@@ -165,6 +188,7 @@ Each created spool is tagged `data_origin = "barcode-scan"`.
 | `ofd.py` | Open Filament Database client — builds the GTIN + article-number (SKU) indexes, cached/refreshed daily |
 | `spoolmandb_community.py` | SpoolmanDB-Community client — builds the GTIN + SKU indexes from the community filament repo, cached/refreshed daily |
 | `filament_parse.py` | Heuristics turning product/label text into filament fields (paste-title + label OCR) |
+| `label_reader.py` | What a label says beyond that: codes to try in order, effect, dual-colour parts, Bambuddy material spelling (shared logic with NozzleCast) |
 | `templates/index.html` | Mobile UI (barcode scan + manual entry + editable form), Bambuddy dark/green theme |
 | `static/manifest.webmanifest`, `static/sw.js`, `static/icons/` | PWA manifest, service worker, and app icons |
 

@@ -28,7 +28,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt gunicorn
 
 # App code
-COPY app.py ofd.py filament_parse.py spoolmandb_community.py i18n.py ./
+COPY app.py ofd.py filament_parse.py label_reader.py spoolmandb_community.py i18n.py ./
 COPY templates ./templates
 COPY static ./static
 

@@ -35,7 +35,7 @@ them — the same barcode, a sibling package size, or the manufacturer SKU —
 auto-fills instantly next time. *(Scope: new, unopened spools still in the box.)*
 
 > **Tested with** Bambuddy v0.2.4.8; the spool create payload (built-in
-> inventory and Spoolman mode) is checked against Bambuddy 1.2.5.7's schemas.
+> inventory and Spoolman mode) is checked against Bambuddy 1.3.1's schemas (main).
 > Requires **Python 3.10+**.
 
 ---

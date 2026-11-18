@@ -156,7 +156,9 @@ def label_color(text: str) -> dict:
     """
     lines = _lines(text)
     for line in lines:
-        m = re.match(r"^(?:COLOU?R(?:\s+NAME)?)\s*[:：]\s*(.+)$", line, re.IGNORECASE)
+        # \S right after the separator keeps the spaces and the value from
+        # overlapping (CodeQL py/polynomial-redos).
+        m = re.match(r"^COLOU?R(?: +NAME)? *[:：] *(\S.*)$", line, re.IGNORECASE)
         if m:
             value = m.group(1).strip()
             if value and len(value) <= 40:
@@ -232,7 +234,11 @@ def _is_sku_shaped(token: str) -> bool:
         return False
     if sum(c.isdigit() for c in token) < 3 or not any(c.isalpha() for c in token):
         return False
-    return not re.fullmatch(r"\d+(?:MM|G|KG|C|F)", token, re.IGNORECASE)
+    # A measurement: digits then a unit. Checked without a regex, so a long
+    # run of digits can't make it backtrack (CodeQL py/polynomial-redos).
+    upper = token.upper()
+    return not any(upper.endswith(unit) and upper[: -len(unit)].isdigit()
+                   for unit in ("MM", "KG", "G", "C", "F"))
 
 
 _SKU_LABEL = re.compile(
